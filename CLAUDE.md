@@ -1,0 +1,24 @@
+# d7 — working notes for Claude
+
+Software project (not a build): Python GUI + CLI controlling a Kenwood
+TH-D7 / TH-D7G handheld over its serial PC port. Started 2026-10-24.
+No Redmine project and no `new-project.sh` skeleton (that skeleton is for
+CAD builds). Git repository since 2026-10-24 (branch `main`, no remote).
+
+## Layout
+- `d7ctl/protocol.py` — tables, `Channel`, wire spec encode/decode (pure)
+- `d7ctl/settings.py` — registry of every menu setting (key, kind, values, model variant)
+- `d7ctl/radio.py` — `D7Radio`: port, reader thread, reply matching, high-level API
+- `d7ctl/emulator.py` — simulated radio (in-process `emulator` port, or `d7ctl-emulator` on a pty)
+- `d7ctl/memfile.py` — CHIRP-format CSV, JSON backup
+- `d7ctl/cli.py`, `d7ctl/gui.py` (PySide6; all radio I/O on one FIFO worker thread)
+- `PROTOCOL.md` — command set, sources, and the list of details unverified on hardware
+
+## Rules
+- Venv in `.venv` (PySide6-Essentials, pyserial, pytest; package installed editable).
+  System Python has no tkinter, so the GUI is Qt.
+- `.venv/bin/python -m pytest -q` must pass after every change; GUI tests run offscreen.
+- Any protocol fact learned from the real radio: fix the code, the emulator
+  (it must keep matching the radio), and PROTOCOL.md's Unverified list together.
+- TX is outward-facing: the CLI only keys with an explicit `--seconds` (max 300)
+  and always sends RX in `finally`; the GUI PTT is hold-to-talk with a 3-min guard.

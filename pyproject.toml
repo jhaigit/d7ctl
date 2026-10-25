@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d7ctl"
+version = "0.1.0"
+description = "Control a Kenwood TH-D7 / TH-D7G handheld over its serial port (GUI and command line)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.4"]
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.5"]
+test = ["pytest"]
+
+[project.scripts]
+d7ctl = "d7ctl.cli:main"
+d7ctl-emulator = "d7ctl.emulator:main"
+
+[project.gui-scripts]
+d7ctl-gui = "d7ctl.gui:main"
+
+[tool.setuptools]
+packages = ["d7ctl"]
