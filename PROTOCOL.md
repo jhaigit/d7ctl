@@ -42,7 +42,7 @@ lines (`BUF`, `BY`, `SM`, `BC`, ...) when things change.
 | `ID` | `ID TH-D7` / `ID TH-D7G` | model (A/E report TH-D7) |
 | `AI n` | `AI n` | auto-information off/on |
 | `BC [b]` | `BC b` | control band 0 A / 1 B |
-| `BUF b[,spec]` | `BUF b,spec` | band buffer read (write: see Unverified) |
+| `BUF b[,spec]` | `BUF b,spec` | band buffer read and write |
 | `FQ freq,step` | | frequency of the control band |
 | `SFT OS TO CT TN CTN REV MD ST` | | buffer fields of the control band |
 | `VMC b[,m]` | `VMC b,m` | band mode 0 VFO, 2 MR, 3 CALL |
@@ -70,6 +70,9 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
 - `ID` -> `ID TH-D7`; `AI 0`, `BC`, `DL`, `BUF 0`, `VMC`, `SQ`, `PC`, `SM`, `BY`
   all answer in the formats above. `BUF 0` with an empty DCS and an empty field
   as documented: `BUF 0,00156800000,0,0,0,0,0,,23,,23,000000000,0`.
+- **BUF write works** and echoes the new buffer: `BUF 0,00122800000,0,0,0,0,0,,01,,01,000000000,1`
+  -> the same line, and `BUF 0` then reads it back. AM (mode 1) on 122.7 MHz
+  decodes and re-encodes unchanged.
 - With `DL 0` (single band), `BUF 1` answers `N`: the hidden band does not answer.
 - Some settings carry fields after the value: `APO 1,0` and `BEL 0,0,` (an
   empty last field). The driver decodes the first field and writes back the
@@ -94,9 +97,8 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   Code 1 is refused: `PC 0,1` -> `N`; `PC 0,2` -> `PC 0,2`.
 
 ## Unverified - check on a real radio
-1. **BUF write.** The command list says BUF accepts new data. If the radio
-   answers `?`, `D7Radio.set_vfo` falls back to `BC b` + FQ/SFT/OS/TO/CT/TN/CTN/REV/MD
-   and restores BC - so it works either way, but note which path runs (`-v`).
+1. (Resolved 2026-10-27: BUF write works - see above. The FQ/SFT/... fallback
+   in `D7Radio.set_vfo` stays for radios that answer `?`, but has not run on one.)
 2. (Resolved 2026-10-27: `PC b,1` is refused - see above.)
 3. (Resolved 2026-10-27: `SV` is one digit, 0 Off, 1 0.2 s ... 9 5 s.)
 4. (Resolved 2026-10-27: `DL` 0 single band, 1 dual.)
