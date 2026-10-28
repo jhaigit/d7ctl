@@ -32,6 +32,7 @@ class Emulator:
         self.control = 0
         self.dual = True
         self.tx = False
+        self.packet_mode = False          # TNC in PACKET mode: it owns the port
         self.vfo = [Channel(freq=144_390_000, step=3), Channel(freq=446_000_000, step=3)]
         self.band_mode = [0, 0]
         self.mc = ["000", "000"]
@@ -105,6 +106,13 @@ class Emulator:
                 return "?"
 
     def _handle(self, line: str) -> str:
+        if self.packet_mode:
+            # TNC: echo after the prompt, refuse; "TC 1" hands the port back
+            # (TC 1 is from the Kenwood command lists, not yet seen on the radio)
+            if line.replace(" ", "").upper() == "TC1":
+                self.packet_mode = False
+                return "TC 1"
+            return f"cmd:{line}\r?EH"
         if not line:
             return "?"
         mn, args = P.split_reply(line)
@@ -155,6 +163,8 @@ class Emulator:
     # -- band buffers ------------------------------------------------------
     def _cmd_BUF(self, args):
         b = self._band(args)
+        if not self.dual and b != self.control:
+            return "N"                     # a hidden band, as on the TH-D7 (2026-10-27)
         if len(args) > 1:
             ch = Channel.from_spec_fields(args[1:])
             ch.validate()
@@ -368,9 +378,9 @@ class Emulator:
 
 def _default_raw(s) -> str:
     if s.kind == "bool":
-        return "0"
+        return "0" + s.tail
     if s.kind in ("choice", "int"):
-        return f"{s.minimum:0{s.digits}d}" if s.kind == "int" else "0" * s.digits
+        return (f"{s.minimum:0{s.digits}d}" if s.kind == "int" else "0" * s.digits) + s.tail
     if s.kind == "map":
         return s.choices[0][1]
     if s.kind == "position":

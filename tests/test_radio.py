@@ -142,3 +142,49 @@ def test_real_serial_path_over_pty():
     finally:
         proc.terminate()
         proc.wait(5)
+
+
+def test_settings_with_trailing_fields(radio):
+    # the TH-D7 answers "APO 1,0" and "BEL 0,0," (2026-10-27)
+    s = next(s for s in radio.settings() if s.key == "APO")
+    assert s.decode("1,0") == "30 min"
+    radio.write_setting(s, "60 min")
+    assert radio.command("APO") == "APO 2,0"           # the trailing field is sent back
+    s = next(s for s in radio.settings() if s.key == "BEL 0")
+    assert radio.read_setting_raw(s) == "0,"
+    radio.write_setting(s, True)
+    assert radio.command("BEL 0") == "BEL 0,1,"
+
+
+def test_hidden_band_buffer(radio):
+    radio.command("DL 0")                              # single band: B is hidden
+    assert radio.command("BUF 1", check=False) == "N"
+    st = radio.status()
+    assert st["dual"] is False and st["bands"][1] == {"band": "B", "hidden": True}
+
+
+def test_power_codes(radio):
+    # a TH-D7A showing L answered "PC 0,2" (2026-10-27): 0 High, 2 Low, 3 EL
+    radio.set_power(0, "low")
+    assert radio.command("PC 0") == "PC 0,2"
+    radio.set_power(0, "el")
+    assert radio.command("PC 0") == "PC 0,3"
+    s = next(s for s in radio.settings() if s.key == "PC 0")
+    assert s.decode("2") == "Low" and s.encode("EL") == "3"
+
+
+def test_tnc_in_packet_mode(monkeypatch):
+    # the TH-D7A's TNC in PACKET mode answers "cmd:ID" then "?EH" (2026-10-27)
+    import d7ctl.emulator as emu
+    from d7ctl.radio import TncPacketMode
+
+    class PacketEmulator(emu.Emulator):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.packet_mode = True
+
+    monkeypatch.setattr(emu, "Emulator", PacketEmulator)
+    r = D7Radio("emulator", timeout=0.3)
+    with pytest.raises(TncPacketMode, match="PACKET"):
+        r.open()
+    assert r.emulator.handle("TC 1") == "TC 1" and not r.emulator.packet_mode

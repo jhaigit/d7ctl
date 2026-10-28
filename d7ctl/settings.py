@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .protocol import TONES_HZ, parse_bool
+from .protocol import POWERS, TONES_HZ, parse_bool
 
 # Radio models as reported by "ID": TH-D7A and TH-D7E answer "TH-D7";
 # the TH-D7A(G) / TH-D7E(G) answer "TH-D7G".
@@ -54,6 +54,7 @@ class Setting:
     charset: Optional[str] = None
     models: tuple = ALL            # empty = every model
     restore: bool = True           # safe to write back when restoring a backup
+    tail: str = ""                 # extra fields the radio sends after the value (",0" in "APO 1,0")
     note: str = ""
 
     # -- wire ------------------------------------------------------------
@@ -90,8 +91,13 @@ class Setting:
         return not self.models or model is None or model in self.models
 
     # -- conversions -------------------------------------------------------
+    def value_field(self, raw: str) -> str:
+        """The value of a bool/choice/int, without any trailing fields."""
+        return raw.split(",", 1)[0] if self.kind in ("bool", "choice", "int") else raw
+
     def decode(self, raw: str):
         k = self.kind
+        raw = self.value_field(raw)
         if k == "bool":
             return raw.strip() == "1"
         if k == "choice":
@@ -235,6 +241,7 @@ def _t(key, label, group, max_len, **kw):
     return Setting(key, label, group, "text", max_len=max_len, **kw)
 
 
+POWER_CODES = tuple((label, str(code)) for code, label in POWERS.items())
 SQUELCH = ("0 (open)", "1", "2", "3", "4", "5")
 
 SETTINGS = [
@@ -250,14 +257,15 @@ SETTINGS = [
        note="readable only while the control band is in MR mode"),
     _c("SQ 0", "Squelch band A", "Operation", SQUELCH, digits=2),
     _c("SQ 1", "Squelch band B", "Operation", SQUELCH, digits=2),
-    _c("PC 0", "TX power band A", "Operation", ("High", "Low", "EL")),
-    _c("PC 1", "TX power band B", "Operation", ("High", "Low", "EL")),
+    Setting("PC 0", "TX power band A", "Operation", "map", choices=POWER_CODES),
+    Setting("PC 1", "TX power band B", "Operation", "map", choices=POWER_CODES),
     _b("ASC 0", "Auto simplex check band A", "Operation",
        note="needs band A shown (dual band on or A is control band)"),
     _b("ASC 1", "Auto simplex check band B", "Operation",
        note="needs band B shown (dual band on or B is control band)"),
-    _b("BEL 0", "Tone alert band A", "Operation", note="needs band A shown"),
-    _b("BEL 1", "Tone alert band B", "Operation", note="needs band B shown"),
+    # The TH-D7 answers "BEL 0,0," - an empty field after the value (2026-10-27)
+    _b("BEL 0", "Tone alert band A", "Operation", tail=",", note="needs band A shown"),
+    _b("BEL 1", "Tone alert band B", "Operation", tail=",", note="needs band B shown"),
     _b("TNC", "TNC (APRS / packet)", "Operation", restore=False,
        note="in PACKET mode the PC port belongs to the TNC and control is lost"),
     _b("BCN", "APRS beacon", "Operation"),
@@ -266,14 +274,16 @@ SETTINGS = [
     Setting("CNT", "LCD contrast", "Radio", "int", minimum=1, maximum=16, digits=2),
     _c("SV", "Battery saver", "Radio",
        ("Off", "0.2 s", "0.4 s", "0.6 s", "0.8 s", "1.0 s", "2 s", "3 s", "4 s", "5 s")),
-    _c("APO", "Auto power off", "Radio", ("Off", "30 min", "60 min")),
+    # The TH-D7 answers "APO 1,0"; the second field's meaning is unknown (2026-10-27)
+    _c("APO", "Auto power off", "Radio", ("Off", "30 min", "60 min"), tail=",0"),
     _b("ARO", "Auto repeater offset", "Radio"),
     _c("SCR", "Scan resume", "Radio", ("Time", "Carrier", "Seek")),
     _c("BEP", "Key beep", "Radio", ("Off", "Key", "Key+Data", "All")),
     _b("ELK", "Tuning knob disabled (lock)", "Radio"),
     _b("TXS", "TX inhibit", "Radio"),
     _b("AIP", "Advanced intercept point (VHF)", "Radio"),
-    _b("TH", "TX hold, 1750 Hz", "Radio"),
+    # The TH-D7A answers "N" (not now) to TH; the condition is unknown (2026-10-27)
+    _b("TH", "TX hold, 1750 Hz", "Radio", note="the TH-D7A refuses it at times"),
     _c("CKEY", "CALL key function", "Radio", ("Call", "1750 Hz"), models=(D7G,)),
     _b("NSFT", "Beat shift", "Radio",
        note="moves the CPU clock to clear a birdie on the receive frequency"),
@@ -330,11 +340,10 @@ SETTINGS += [
        ("0.5 min", "1 min", "2 min", "3 min", "4 min", "5 min", "10 min", "20 min", "30 min")),
     _t("UPR", "Group code (unproto)", "APRS", 9,
        charset="ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"),
-    _c("BEPT", "APRS beep", "APRS", ("Off", "Mine", "All new"), models=(D7,)),
+    # BEPT and TEMP: the TH-D7A answers "?" (unknown command) to both (2026-10-27)
     _c("BEPT", "APRS beep", "APRS", ("Off", "Mine", "All new", "All"), models=(D7G,)),
     _c("DSPA", "Display area", "APRS", ("Entire display", "One line"), models=(D7G,)),
     _c("KILO", "Distance unit", "APRS", ("Miles", "Kilometres"), models=(D7G,)),
-    _c("TEMP", "Units", "APRS", ("Miles / °F", "Kilometres / °C"), models=(D7,)),
     _c("TEMP", "Temperature unit", "APRS", ("°F", "°C"), models=(D7G,)),
     _b("AMR", "Auto answer reply", "APRS", models=(D7G,)),
     _t("ARLM", "Reply message", "APRS", 45, models=(D7G,)),

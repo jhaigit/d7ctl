@@ -5,6 +5,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+QtCore = pytest.importorskip("PySide6.QtCore")
 
 from d7ctl.gui import MainWindow  # noqa: E402
 
@@ -63,3 +64,23 @@ def test_gui_connect_edit_and_memories(app):
     win.key_tx(False)
     assert pump(app, win, lambda: not win.radio.emulator.tx)
     win.close()
+
+
+def test_gui_panels_are_docks(app, tmp_path):
+    store = QtCore.QSettings(str(tmp_path / "layout.ini"), QtCore.QSettings.IniFormat)
+    win = MainWindow("emulator", store)
+    win.show()
+    app.processEvents()
+    d = win.docks
+    assert set(d) == {"Radio", "Memories", "Settings", "Console"}
+    # by default the console is beside the panels, not a tab among them
+    assert win.dockWidgetArea(d["Console"]) != win.dockWidgetArea(d["Radio"])
+    assert d["Memories"] in win.tabifiedDockWidgets(d["Radio"])
+    # float the console; the layout is remembered across a restart
+    d["Console"].setFloating(True)
+    win.close()
+    win2 = MainWindow("emulator", store)
+    assert win2.docks["Console"].isFloating()
+    win2.default_layout()
+    assert not win2.docks["Console"].isFloating()
+    win2.close()

@@ -16,11 +16,11 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
-    QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
+    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
     QSlider, QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
@@ -265,8 +265,10 @@ class BandPanel(QGroupBox):
         mp.addWidget(self.mode)
         mp.addWidget(QLabel("Power"))
         self.power = QComboBox()
-        self.power.addItems(list(P.POWERS.values()))
-        self.power.activated.connect(lambda i: self.main.run(lambda r: r.set_power(band, i)))
+        for code, label in P.POWERS.items():
+            self.power.addItem(label, code)
+        self.power.activated.connect(
+            lambda i: self.main.run(lambda r: r.set_power(band, self.power.itemData(i))))
         mp.addWidget(self.power)
         form.addRow("Mode", mp)
 
@@ -356,7 +358,7 @@ class BandPanel(QGroupBox):
             if i >= 0:
                 self.mem_combo.setCurrentIndex(i)
         if st.get("power") is not None:
-            self.power.setCurrentIndex(st["power"])
+            self.power.setCurrentIndex(self.power.findData(st["power"]))
         if st.get("squelch") is not None:
             self._sq_sent = st["squelch"]
             self.squelch.blockSignals(True)
@@ -823,7 +825,10 @@ class SettingRow:
             self.set_available(False, "not available on this radio now" + (f" - {self.s.note}" if self.s.note else ""))
             return
         self.set_available(True)
-        value = self.s.decode(raw)
+        try:
+            value = self.s.decode(raw)
+        except ValueError:
+            value = raw                    # unexpected format: show it as the radio sent it
         w = self.widget
         w.blockSignals(True)
         try:
@@ -1067,8 +1072,10 @@ class ConsoleTab(QWidget):
 # ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
-    def __init__(self, port=None):
+    def __init__(self, port=None, store: QSettings | None = None):
+        """store: where the window layout is remembered between runs (None: not kept)."""
         super().__init__()
+        self.store = store
         self.setWindowTitle("TH-D7 Control")
         self.radio: D7Radio | None = None
         self.transmitting = False
@@ -1108,17 +1115,26 @@ class MainWindow(QMainWindow):
         self.model_label = QLabel("  not connected")
         tb.addWidget(self.model_label)
 
-        self.tabs = QTabWidget()
+        # Every panel is a dock: drag its title bar to put panels side by
+        # side or in tabs, or double-click it to float it as its own window.
         self.radio_tab = RadioTab(self)
         self.memories = MemoriesTab(self)
         self.settings_tab = SettingsTab(self)
         self.console = ConsoleTab(self)
         self.bridge.traffic.connect(self.console.add)
-        self.tabs.addTab(self.radio_tab, "Radio")
-        self.tabs.addTab(self.memories, "Memories")
-        self.tabs.addTab(self.settings_tab, "Settings")
-        self.tabs.addTab(self.console, "Console")
-        self.setCentralWidget(self.tabs)
+        self.docks = {}
+        view = self.menuBar().addMenu("&View")
+        for name, panel in (("Radio", self.radio_tab), ("Memories", self.memories),
+                            ("Settings", self.settings_tab), ("Console", self.console)):
+            dock = QDockWidget(name, self)
+            dock.setObjectName(f"dock_{name}")          # saveState keys on it
+            dock.setWidget(panel)
+            self.docks[name] = dock
+            view.addAction(dock.toggleViewAction())
+        view.addSeparator()
+        view.addAction("Reset layout", self.default_layout)
+        self.setDockNestingEnabled(True)
+        self.default_layout()
         self.set_connected(False)
 
         self.poll_timer = QTimer(self)
@@ -1136,6 +1152,24 @@ class MainWindow(QMainWindow):
         if port:
             self.port.setCurrentText(port)
         self.resize(1180, 760)
+        if self.store is not None and self.store.value("window/geometry") is not None:
+            self.restoreGeometry(self.store.value("window/geometry"))
+            self.restoreState(self.store.value("window/state"))
+
+    CONSOLE_HEIGHT = 180          # px: about ten lines of traffic under the panels
+
+    def default_layout(self):
+        """Radio, Memories and Settings in tabs at the top; the Console below them."""
+        d = self.docks
+        for dock in d.values():
+            dock.setFloating(False)
+            dock.show()
+        self.addDockWidget(Qt.TopDockWidgetArea, d["Radio"])
+        self.addDockWidget(Qt.BottomDockWidgetArea, d["Console"])
+        self.tabifyDockWidget(d["Radio"], d["Memories"])
+        self.tabifyDockWidget(d["Radio"], d["Settings"])
+        d["Radio"].raise_()
+        self.resizeDocks([d["Console"]], [self.CONSOLE_HEIGHT], Qt.Vertical)
 
     # -- plumbing -----------------------------------------------------------
     def status(self, text):
@@ -1237,6 +1271,9 @@ class MainWindow(QMainWindow):
         self.worker.submit(close, lambda _: self.console.note("disconnected"))
 
     def closeEvent(self, ev):
+        if self.store is not None:
+            self.store.setValue("window/geometry", self.saveGeometry())
+            self.store.setValue("window/state", self.saveState())
         self.disconnect_radio()
         self.worker.pool.waitForDone(3000)
         super().closeEvent(ev)
@@ -1427,7 +1464,7 @@ def main(argv=None):
     args, qt_args = ap.parse_known_args(argv)
     app = QApplication.instance() or QApplication([sys.argv[0]] + qt_args)
     app.setApplicationName("d7ctl")
-    win = MainWindow(args.port)
+    win = MainWindow(args.port, QSettings("d7ctl", "d7ctl"))
     win.show()
     if args.connect:
         QTimer.singleShot(0, win.toggle_connection)

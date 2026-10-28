@@ -21,6 +21,9 @@ BAUDRATE = 9600            # the D7's PC port is fixed at 9600 8N1, no handshake
 EOL = b"\r"                # both directions
 ENCODING = "latin-1"       # memory names are 8-bit; latin-1 round-trips every byte
 ERROR_REPLIES = ("?", "N")  # "?" = not understood, "N" = not available now
+# In PACKET mode the TNC owns the port: it echoes each line after its prompt
+# and refuses radio commands - "cmd:ID" then "?EH" (TH-D7A, 2026-10-27).
+TNC_PROMPTS = ("cmd:", "?EH")
 
 BANDS = ("A", "B")         # band index on the wire: 0 = A, 1 = B
 
@@ -43,7 +46,9 @@ SHIFTS = {0: "simplex", 1: "+", 2: "-", 3: "-7.6M"}
 SHIFT_SYMBOLS = {0: "", 1: "+", 2: "-", 3: "-7.6"}
 
 MODES = {0: "FM", 1: "AM"}           # MD; AM is receive-only (air band)
-POWERS = {0: "High", 1: "Low", 2: "EL"}   # PC: 5 W / 0.5 W / 50 mW (manual)
+# PC: 5 W / 0.5 W / 50 mW (manual). Codes as in the TA1DX list, not 0-1-2:
+# a TH-D7A showing L answered "PC 0,2" (2026-10-27). 1 is unused.
+POWERS = {0: "High", 2: "Low", 3: "EL"}
 BAND_MODES = {0: "VFO", 2: "MR", 3: "CALL"}   # VMC; 1 is unused on the D7
 
 SQUELCH_MAX = 5            # SQ levels 0 (open) .. 5

@@ -7,9 +7,10 @@ Sources (fetched 2026-10-24):
 - CHIRP `chirp/drivers/kenwood_d7.py` (live-mode TH-D7/D7G driver: memory spec,
   call channels, program-scan IDs, the settings menu and its value lists).
 
-Nothing in this file has yet been checked against a real radio; the
-emulator (`d7ctl/emulator.py`) implements exactly what is written here.
-The items under **Unverified** are the ones to check first on hardware.
+First checked against a real radio on 2026-10-27 (a TH-D7A, `ID TH-D7`,
+PG-4W-type cable on /dev/ttyUSB0); see **Seen on hardware**. The emulator
+(`d7ctl/emulator.py`) implements exactly what is written here. The items
+under **Unverified** are the ones still to check.
 
 ## Link
 9600 baud, 8N1, no handshake, on the 2.5 mm PC jack (tip = data from
@@ -47,7 +48,7 @@ lines (`BUF`, `BY`, `SM`, `BC`, ...) when things change.
 | `VMC b[,m]` | `VMC b,m` | band mode 0 VFO, 2 MR, 3 CALL |
 | `MC b[,ccc]` | `MC b,ccc` | memory on band (MR mode) |
 | `SQ b[,nn]` | `SQ b,nn` | squelch 00-05 |
-| `PC b[,p]` | `PC b,p` | TX power |
+| `PC b[,p]` | `PC b,p` | TX power: 0 High, 2 Low, 3 EL |
 | `SM b` / `BY b` | `SM b,n` / `BY b,0/1` | S-meter 0-5 / busy |
 | `TX` `RX` `TT` | | key / unkey / 1750 Hz tone |
 | `UP` `DW` | | knob step on the control band |
@@ -65,17 +66,41 @@ lines (`BUF`, `BY`, `SM`, `BC`, ...) when things change.
 Every other menu setting is a plain get/set of one value; the full list
 with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
 
-## Unverified - check on the first connection to a real radio
+## Seen on hardware (TH-D7A, 2026-10-27)
+- `ID` -> `ID TH-D7`; `AI 0`, `BC`, `DL`, `BUF 0`, `VMC`, `SQ`, `PC`, `SM`, `BY`
+  all answer in the formats above. `BUF 0` with an empty DCS and an empty field
+  as documented: `BUF 0,00156800000,0,0,0,0,0,,23,,23,000000000,0`.
+- With `DL 0` (single band), `BUF 1` answers `N`: the hidden band does not answer.
+- Some settings carry fields after the value: `APO 1,0` and `BEL 0,0,` (an
+  empty last field). The driver decodes the first field and writes back the
+  trailing fields as last read (`Setting.tail` when nothing was read yet).
+  What APO's second field means is not known.
+- A full backup read 61 memories and 76 of the 82 settings registered for
+  the TH-D7. Not answered: `PC 1`, `ASC 1`, `BEL 1` (band B hidden, expected)
+  and `TH` (`N`: exists, refused in the state the radio was in), `BEPT` and
+  `TEMP` (`?`: not on the TH-D7A, so now TH-D7G only).
+- `SV 5`, `TXI 4`: one digit each.
+- With the TNC in PACKET mode the TNC answers instead: `ID` gives `cmd:ID`
+  (its prompt and an echo) then `?EH`. `D7Radio.open` reports this as
+  `TncPacketMode` instead of a plain timeout.
+- **PC codes are 0 High, 2 Low, 3 EL** (the TA1DX list; not 0-1-2 as first
+  coded): the radio answered `PC 0,2` with L on its display.
+
+## Unverified - check on a real radio
 1. **BUF write.** The command list says BUF accepts new data. If the radio
    answers `?`, `D7Radio.set_vfo` falls back to `BC b` + FQ/SFT/OS/TO/CT/TN/CTN/REV/MD
    and restores BC - so it works either way, but note which path runs (`-v`).
-2. **PC values.** Taken as 0 High, 1 Low, 2 EL; the command list says
-   "0=H, 2=L, 3=EL". Read `PC 0` at each power setting on the radio.
-3. **Choice widths.** `SV` (battery saver) has ten values: one digit or
-   two? The driver pads writes to the width the radio used in its last
-   reply, so reading a setting before writing it is always safe.
-4. **DL polarity.** 1 = dual-band display on (as CHIRP uses it).
+2. **PC 1.** Power codes are 0 High, 2 Low, 3 EL (see above); what the
+   radio does with `PC b,1` is unknown - the emulator answers `N`.
+3. **Choice widths.** `SV` answered one digit (`SV 5`), as registered. The
+   driver pads writes to the width the radio used in its last reply, so
+   reading a setting before writing it is always safe.
+4. **DL polarity.** 1 = dual-band display on (as CHIRP uses it). `DL 0`
+   together with `BUF 1` -> `N` supports it; confirm the display showed one band.
 5. **TXI first value**: 0.5 min (CHIRP) vs 0.2 min (TA1DX list).
 6. Replies to `MW`, `TX`, `RX`, `TT`, `UP`, `DW` - the driver accepts any
    reply starting with the mnemonic.
 7. `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
+8. **APO second field**, and when `TH` is accepted.
+9. **`TC 1`** (from the Kenwood command lists) should hand the port from the
+   TNC back to the radio; the emulator assumes it does and answers `TC 1`.

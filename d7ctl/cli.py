@@ -122,7 +122,9 @@ def progress_printer(label):
 
 def cmd_ports(radio, a):
     from serial.tools import list_ports
-    ports = list(list_ports.comports())
+    # Linux lists every legacy 8250 UART slot (/dev/ttyS0-31) whether or not
+    # hardware is behind it; those report no description ("n/a").
+    ports = [p for p in list_ports.comports() if p.description not in ("", "n/a")]
     if not ports:
         print("no serial ports found (USB adapters appear as /dev/ttyUSB*, /dev/ttyACM*)")
     for p in ports:
@@ -439,7 +441,13 @@ def cmd_shell(radio, a):
 
 
 def cmd_gui(radio, a):
-    from .gui import main as gui_main
+    try:
+        from .gui import main as gui_main
+    except ModuleNotFoundError as e:
+        if e.name is None or not e.name.startswith("PySide6"):
+            raise
+        sys.exit("the GUI needs PySide6: pip install PySide6-Essentials "
+                 "(or pip install -e '.[gui]')")
     gui_main([] if a.port is None else ["--port", a.port])
 
 

@@ -33,6 +33,10 @@ class RadioTimeout(RadioError):
     pass
 
 
+class TncPacketMode(RadioError):
+    """The TNC, not the radio, owns the port: it is in PACKET mode."""
+
+
 class CommandRejected(RadioError):
     """The radio replied '?' (not understood) or 'N' (not possible now)."""
 
@@ -85,6 +89,8 @@ class D7Radio:
         self._event_listeners: list = []
         self._traffic_listeners: list = []
         self._widths: dict = {}                 # setting key -> width seen on the wire
+        self._tails: dict = {}                  # setting key -> fields after the value, as last read
+        self._tnc_seen = False                  # a TNC prompt arrived (see TNC_PROMPTS)
         self.emulator = None
 
     # ------------------------------------------------------------------
@@ -111,6 +117,13 @@ class D7Radio:
         time.sleep(0.15)
         try:
             self.model = self.identify()
+        except RadioTimeout:
+            self.close()
+            if self._tnc_seen:
+                raise TncPacketMode(
+                    "the TNC answered instead of the radio: it is in PACKET mode. Press [TNC] "
+                    "on the radio until PACKET leaves the display") from None
+            raise
         except RadioError:
             self.close()
             raise
@@ -183,6 +196,8 @@ class D7Radio:
 
     def _dispatch(self, line: str) -> None:
         self._notify_traffic("<", line)
+        if line.startswith(P.TNC_PROMPTS):
+            self._tnc_seen = True
         with self._pending_lock:
             pending = self._pending
             if pending is not None and pending.reply is None and pending.matches(line):
@@ -487,8 +502,11 @@ class D7Radio:
 
     def read_setting_raw(self, s: Setting) -> str:
         raw = s.raw_from_reply(self.command(s.read_command()))
-        if s.kind in ("choice", "int"):
-            self._widths[s.key] = len(raw)
+        if s.kind in ("bool", "choice", "int"):
+            value = s.value_field(raw)
+            self._tails[s.key] = raw[len(value):]
+            if s.kind != "bool":
+                self._widths[s.key] = len(value)
         return raw
 
     def read_setting(self, s: Setting):
@@ -498,6 +516,9 @@ class D7Radio:
         width = self._widths.get(s.key)
         if width and s.kind in ("choice", "int") and raw.isdigit():
             raw = raw.zfill(width)[-width:] if len(raw) <= width else raw
+        if s.kind in ("bool", "choice", "int") and "," not in raw:
+            # send back the trailing fields the radio gave, unchanged
+            raw += self._tails.get(s.key, s.tail)
         self.command(s.write_command(raw))
 
     def write_setting(self, s: Setting, value) -> None:
