@@ -332,23 +332,34 @@ class D7Radio:
     @staticmethod
     def sweep_channel(saved: dict, hz: int, step_khz: float) -> Channel:
         """The VFO setting sweep_point puts on the band for hz."""
-        # reverse off: reverse would put the receiver on the TX frequency
         return saved["vfo"].replace(freq=int(hz), step=P.step_index(step_khz), reverse=False)
 
     def sweep_point(self, saved: dict, hz: int, step_khz: float, settle_s: float) -> Optional[int]:
         """S-meter (0-5) at hz, or None when the radio refuses the frequency."""
+        return self.scan_point(saved, self.sweep_channel(saved, hz, step_khz), settle_s)
+
+    def scan_point(self, saved: dict, ch: Channel, settle_s: float) -> Optional[int]:
+        """Put ch (e.g. a memory's channel) on the swept band's VFO; S-meter (0-5)
+        after settle_s, or None when the radio refuses it."""
+        # reverse off: reverse would put the receiver on the TX frequency
+        ch = ch.replace(name="", lockout=False, reverse=False, tx_freq=None)
         try:
-            self.set_vfo(saved["band"], self.sweep_channel(saved, hz, step_khz))
+            self.set_vfo(saved["band"], ch)
         except (CommandRejected, ValueError):
             return None
         time.sleep(settle_s)
         return self.get_smeter(saved["band"])
 
     def sweep_end(self, saved: dict, tune_hz: Optional[int] = None,
-                  step_khz: Optional[float] = None) -> None:
+                  step_khz: Optional[float] = None, memid=None) -> None:
         """Put the band back as it was, or leave it in VFO on tune_hz
-        (with the sweep's step, so that tune_hz is on the tuning grid)."""
+        (with the sweep's step, so that tune_hz is on the tuning grid),
+        or recall memory memid (a memory scan)."""
         b = saved["band"]
+        if memid is not None:
+            self.set_vfo(b, saved["vfo"])
+            self.recall_memory(b, memid)
+            return
         if tune_hz is not None:
             ch = saved["vfo"].replace(freq=int(tune_hz))
             if step_khz is not None:

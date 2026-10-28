@@ -97,6 +97,7 @@ def test_gui_band_scan_and_click_to_tune(app):
     sc.stop_mhz.setText("146.60")
     sc.step.setCurrentText("20")
     sc.dwell.setValue(0)
+    sc.on_signal.setCurrentIndex(0)                   # don't stop on signals
     win.radio.recall_memory(0, "001")                 # band A in MR: the sweep must put it back
     sc.start()
     a = win.radio_tab.panels[0]
@@ -108,14 +109,14 @@ def test_gui_band_scan_and_click_to_tune(app):
     # click the peak: band A goes to VFO on that frequency
     x = v._plot_rect()[0] + (v.freqs.index(146_520_000) + 0.5) * v._plot_rect()[2] / len(v.freqs)
     assert v.freqs[v.index_at(x)] == 146_520_000
-    v.clicked.emit(146_520_000)
+    v.clicked.emit(v.freqs.index(146_520_000))
     assert pump(app, win, lambda: not win.worker.pending and win.radio.get_vfo(0).freq == 146_520_000)
     assert win.radio.get_band_mode(0) == 0
     # a click during a running sweep stops it and leaves the band there
     sc.repeat.setChecked(True)
     sc.start()
     assert pump(app, win, lambda: sc.index > 3)
-    v.clicked.emit(146_440_000)
+    v.clicked.emit(v.freqs.index(146_440_000))
     assert pump(app, win, lambda: not sc.running and not win.worker.pending, 10)
     assert win.radio.get_vfo(0).freq == 146_440_000
     win.close()
@@ -277,4 +278,162 @@ def test_console_counts_trailing_spaces(app):
     lines = win.console.log.toPlainText().splitlines()
     assert lines[-2].endswith("MNA 0,199,AB     [2 trailing spaces]")
     assert lines[-1].endswith("MNA 0,198,AB")
+    win.close()
+
+
+def test_gui_scan_holds_on_a_signal(app):
+    win = MainWindow("emulator")
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    sc = win.scan_tab
+    sc.band.setCurrentIndex(0)
+    sc.start_mhz.setText("146.40")
+    sc.stop_mhz.setText("146.60")
+    sc.step.setCurrentText("20")
+    sc.dwell.setValue(0)
+    sc.hold.setValue(30)
+    sc.start()
+    assert pump(app, win, lambda: sc.hold_timer.isActive(), 10)   # stopped on the carrier
+    held = sc.index
+    assert sc.view.freqs[held - 1] == 146_520_000 and "holding" in sc.info.text()
+    time.sleep(0.3)
+    app.processEvents()
+    assert sc.index == held and win.radio.get_vfo(0).freq == 146_520_000
+    sc.toggle()                                                    # Stop ends the hold at once
+    assert pump(app, win, lambda: not sc.running and not win.worker.pending, 5)
+    assert not sc.hold_timer.isActive()
+    win.close()
+
+
+def _scan_window(app, store=None):
+    win = MainWindow("emulator", store)
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    sc = win.scan_tab
+    sc.band.setCurrentIndex(0)
+    sc.dwell.setValue(0)
+    return win, sc
+
+
+def _sweep_146(sc):
+    sc.start_mhz.setText("146.40")
+    sc.stop_mhz.setText("146.60")
+    sc.step.setCurrentText("20")
+
+
+def test_gui_scan_threshold_skips_weaker_signals(app):
+    win, sc = _scan_window(app)
+    _sweep_146(sc)
+    sc.threshold.setValue(5)
+    sc.hold.setValue(30)
+    win.radio.emulator.carriers = [(146_520_000, 4, 5_000)]      # S4: below the threshold
+    sc.start()
+    assert pump(app, win, lambda: not sc.running, 10)
+    assert not sc.holding and sc.view.peaks[sc.view.freqs.index(146_520_000)] == 4
+    win.close()
+
+
+def test_gui_scan_holds_until_the_signal_drops(app):
+    win, sc = _scan_window(app)
+    _sweep_146(sc)
+    sc.on_signal.setCurrentIndex(2)                               # until it drops, then 0 s
+    sc.hold.setValue(0)
+    emu = win.radio.emulator
+    emu.carriers = [(146_520_000, 3, 5_000)]
+    sc.start()
+    assert pump(app, win, lambda: sc.holding, 10)
+    held = sc.index
+    time.sleep(1.0)                                               # still there: keeps holding
+    app.processEvents()
+    assert pump(app, win, lambda: sc.holding and sc.index == held, 1)
+    emu.carriers = []                                             # the signal drops
+    assert pump(app, win, lambda: not sc.running, 10)
+    assert sc.index == len(sc.view.freqs)                         # went on to the end
+    win.close()
+
+
+def test_gui_memory_scan_of_a_band_and_click_to_recall(app):
+    win, sc = _scan_window(app)
+    sc.mode.setCurrentIndex(1)
+    sc.mem_list.setCurrentIndex(sc.mem_list.findData("band:1"))   # VHF, 136-174 MHz
+    sc.on_signal.setCurrentIndex(0)
+    sc.start()                                                    # reads the memories first
+    assert pump(app, win, lambda: not sc.running and sc.view.labels, 20)
+    assert sc.view.labels == ["000", "001", "003", "010", "021"]  # no UHF, no airband
+    assert sc.view.peaks[sc.view.labels.index("001")] == 5        # the emulator's 146.52 carrier
+    assert win.radio.get_band_mode(0) == 0                        # put back as it was (VFO)
+    sc.view.clicked.emit(sc.view.labels.index("003"))
+    assert pump(app, win, lambda: not win.worker.pending and win.radio.get_band_mode(0) == 2)
+    assert win.radio.values("MC", 0)[1] == "003"
+    win.close()
+
+
+def test_gui_memory_scan_lists_are_kept(app, tmp_path):
+    from d7ctl.gui import MemoryListDialog
+    store = QtCore.QSettings(str(tmp_path / "d7.ini"), QtCore.QSettings.IniFormat)
+    win, sc = _scan_window(app, store)
+    win.memories.read(["000", "001", "002"])
+    assert pump(app, win, lambda: not win.worker.pending and "002" in win.memories.data)
+    dlg = MemoryListDialog(win, "test", ["002"])
+    assert [dlg.list.item(i).data(QtCore.Qt.UserRole) for i in range(dlg.list.count())] == \
+           ["000", "001", "002"]
+    dlg.list.item(0).setCheckState(QtCore.Qt.Checked)
+    assert dlg.ids() == ["000", "002"]
+    sc.lists["repeaters"] = dlg.ids()
+    sc._save_lists()
+    sc._fill_mem_lists("list:repeaters")
+    sc.mode.setCurrentIndex(1)
+    sc.on_signal.setCurrentIndex(0)
+    sc.start()
+    assert pump(app, win, lambda: not sc.running and sc.view.labels == ["000", "002"], 10)
+    win.close()
+    win2 = MainWindow("emulator", store)                          # the list is remembered
+    assert win2.scan_tab.lists == {"repeaters": ["000", "002"]}
+    assert win2.scan_tab.mem_list.findData("list:repeaters") >= 0
+    win2.close()
+
+
+def test_band_panel_memory_list_leaves_out_empty_memories(app):
+    win, _sc = _scan_window(app)
+    win.memories.read(["000", "004"])
+    assert pump(app, win, lambda: not win.worker.pending and "004" in win.memories.data)
+    c = win.radio_tab.panels[0].mem_combo
+    i_used, i_empty, i_unread = (c.findData(m) for m in ("000", "004", "005"))
+    assert c.view().isRowHidden(i_empty) and not c.model().item(i_empty).isEnabled()
+    assert not c.view().isRowHidden(i_used) and not c.view().isRowHidden(i_unread)
+    win.close()
+
+
+def test_memory_scan_axis_shows_as_many_names_as_fit(app):
+    from d7ctl.gui import SpectrumView
+    v = SpectrumView()
+    v.resize(800, 300)
+    v.set_points([146_000_000] * 5, [f"{i:03d}" for i in range(5)], ["W1AW RPT"] * 5)
+    indices, upright, margin = v.label_layout()
+    assert indices == list(range(5)) and not upright and margin == v.MARGIN_B
+    v.set_points([146_000_000] * 50, [f"{i:03d}" for i in range(50)], ["W1AW RPT"] * 50)
+    indices, upright, margin = v.label_layout()
+    assert upright and indices == list(range(50))          # 15 px a bar: one name each
+    assert margin > v.MARGIN_B                               # room for upright names
+    v.set_points([146_000_000] * 200, [f"{i:03d}" for i in range(200)], ["CH"] * 200)
+    indices, upright, _m = v.label_layout()
+    assert upright and 1 < indices[1] and len(indices) > 40  # every k-th, still many
+    v.grab()                                                 # paints without error
+
+
+def test_scan_cursor_marks_the_point_being_measured(app):
+    # the last point too: it was marked only once measured, and the scan then ended
+    win, sc = _scan_window(app)
+    _sweep_146(sc)
+    sc.on_signal.setCurrentIndex(0)
+    seen = []
+    set_cursor = sc.view.set_cursor
+    sc.view.set_cursor = lambda i: (seen.append((i, sc.view.levels[i])), set_cursor(i))
+    sc.start()
+    assert pump(app, win, lambda: not sc.running, 10)
+    n = len(sc.view.freqs)
+    assert [i for i, _l in seen] == list(range(n))
+    assert all(level is None for _i, level in seen)        # marked before it was read
     win.close()

@@ -33,12 +33,18 @@ it off: in PACKET mode the port belongs to the TNC.
   (Operation, Radio, DTMF, TNC, APRS, SSTV, Sky Command, programmable VFO).
   Changed settings show in bold until you write them. **Backup radio…**
   and **Restore…** save or load all memories and settings as JSON.
-- **Scan**: sweeps a band's VFO from one frequency to another and plots the
-  S-meter (0-5) at each step; faint bars hold the peaks over repeated sweeps.
-  Click the graph to tune the band there (it stops a running sweep). After a
-  sweep the band goes back to its mode and frequency. Each point is a BUF
-  write, a dwell for the receiver to settle, and an SM read, so expect a few
-  points a second at 9600 baud.
+- **Scan**: a *band sweep* steps a band's VFO from one frequency to another;
+  a *memory scan* puts each memory of a list on the VFO in turn: every
+  memory, every memory in one frequency band (airband, VHF, UHF; locked-out
+  memories skipped, as the radio's own scan does), or a list of your own
+  (New list…, kept between runs). The S-meter (0-5) at each point is
+  plotted; faint bars hold the peaks over repeated passes. On a signal of
+  the chosen S or more the scan can go on, hold for a time, or hold until
+  the signal drops and then a time more, so you can listen. Click the graph
+  to tune there (a memory is recalled); it stops a running scan. Afterwards
+  the band goes back to its mode and frequency. Each point is a BUF write,
+  a dwell for the receiver to settle, and an SM read: about 3 points a
+  second on a TH-D7A at 9600 baud.
 - **Console**: every line sent and received, and a box for raw commands.
 
 Every panel is a dock: drag it by its title to place panels side by side,

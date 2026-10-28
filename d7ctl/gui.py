@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
+import math
 import os
 import sys
 import threading
@@ -25,7 +27,8 @@ from PySide6.QtGui import (QAction, QColor, QFont, QFontDatabase, QFontMetrics, 
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
     QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
     QSlider, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionComboBox,
     QStyleOptionViewItem, QStylePainter, QTableWidget, QTableWidgetItem,
@@ -235,11 +238,18 @@ def memory_combo() -> QComboBox:
 
 
 def relabel_memory_combo(c: QComboBox, data: dict, only=None) -> None:
+    """Labels from data. A combo with hide_empty set (a recall list) also hides the
+    memories known to be empty; disabled as well, so wheel and keys skip them."""
+    hide_empty = getattr(c, "hide_empty", False)
     for i in range(c.count()):
         memid = c.itemData(i)
         if only is None or memid == only:
             c.setItemText(i, memory_label(memid, data))
             c.setItemData(i, memid not in data, UNREAD_ROLE)
+            if hide_empty:
+                empty = memid in data and data[memid] is None
+                c.view().setRowHidden(i, empty)
+                c.model().item(i).setEnabled(not empty)
 
 
 def tone_items():
@@ -315,7 +325,9 @@ class BandPanel(QGroupBox):
         mem = QHBoxLayout()
         mem.addWidget(QLabel("Memory"))
         self.mem_combo = memory_combo()
-        self.mem_combo.setToolTip("Names show once a memory has been read (Memories tab, or Store VFO)")
+        self.mem_combo.hide_empty = True      # nothing to recall in an empty memory
+        self.mem_combo.setToolTip("Names show once a memory has been read (Memories tab, or Store VFO); "
+                                  "memories known to be empty are left out")
         mem.addWidget(self.mem_combo, 1)
         recall = QPushButton("Recall")
         recall.clicked.connect(self._recall)
@@ -688,31 +700,50 @@ class RadioTab(QWidget):
 
 S_MAX = 5                    # the D7's S-meter reads 0-5
 SWEEP_MAX_POINTS = 4000      # a 5 kHz sweep of 20 MHz; beyond this a sweep takes too long
-SWEEP_DWELL_MS = 100         # default receiver settling time per point (not yet measured)
+SWEEP_DWELL_MS = 100         # default receiver settling time per point; the TH-D7A's S-meter
+                             # had settled before 100 ms (2026-10-28)
+HOLD_S = 5                   # default hold time, or wait after a signal drops
+HOLD_POLL_MS = 400           # S-meter reading interval while holding until a signal drops
+# what a scan does on a signal: (label, key); the hold spin box gives the seconds
+ON_SIGNAL = (("Don't stop", "go"), ("Hold for", "time"), ("Hold until it drops, then", "carrier"))
+SCAN_SWEEP, SCAN_MEMORIES = 0, 1
+FREQ_BAND_NAMES = ("airband", "VHF", "UHF")   # for P.FREQ_BANDS, in order
 
 
 class SpectrumView(QWidget):
-    """S-meter against frequency as bars; click a bar to tune there."""
-    clicked = Signal(int)                 # Hz
-    hovered = Signal(int, object)         # Hz, level or None
+    """S-meter per point as bars: a frequency sweep, or memories (labels = memory ids).
+    Click a bar to tune there."""
+    clicked = Signal(int)                 # point index
+    hovered = Signal(int)                 # point index
 
     MARGIN_L, MARGIN_B, MARGIN_T = 26, 18, 6
+    AXIS_FONT_PT = 8
+    LABEL_GAP = 6                         # px between labels written across the axis
 
     def __init__(self):
         super().__init__()
         self.freqs: list = []
-        self.levels: list = []            # this sweep, None = not read or refused
+        self.labels: list | None = None   # memory ids of a memory scan; None: a sweep
+        self.names: list | None = None    # memory scan: the axis text of each point
+        self.levels: list = []            # this pass, None = not read or refused
         self.peaks: list = []             # highest level seen at each point
         self.cursor = -1                  # point being measured
-        self.marker: int | None = None   # Hz the band was tuned to by a click
+        self.marker: int | None = None   # point the band was tuned to by a click
         self.setMouseTracking(True)
         self.setMinimumHeight(160)
         self.setCursor(Qt.CrossCursor)
 
-    def set_frequencies(self, freqs):
-        if freqs != self.freqs:
-            self.freqs = list(freqs)
+    def set_points(self, freqs, labels=None, names=None):
+        """labels: memory ids (a memory scan); names: their axis texts (default the ids)."""
+        labels = list(labels) if labels is not None else None
+        if names is not None or labels is None:
+            self.names = list(names) if names is not None else None
+        elif self.names is None or len(self.names) != len(labels):
+            self.names = list(labels)
+        if freqs != self.freqs or labels != self.labels:
+            self.freqs, self.labels = list(freqs), labels
             self.peaks = [None] * len(freqs)
+            self.marker = None
         self.levels = [None] * len(freqs)
         self.cursor = -1
         self.update()
@@ -725,12 +756,32 @@ class SpectrumView(QWidget):
         self.levels[i] = level
         if level is not None and (self.peaks[i] is None or level > self.peaks[i]):
             self.peaks[i] = level
+        self.update()
+
+    def set_cursor(self, i):
+        """Mark the point being measured (set before its reading is asked for)."""
         self.cursor = i
         self.update()
 
+    def label_layout(self):
+        """Memory scan axis: (indices labelled, upright, bottom margin). As many names
+        as fit: all across the axis if they fit so; else upright, one per bar, or
+        every k-th when the bars are narrower than a line of text."""
+        fm = QFontMetrics(mono_font(self.AXIS_FONT_PT))
+        n = len(self.names or ())
+        if not n:
+            return [], False, self.MARGIN_B
+        bw = max(1, self.width() - self.MARGIN_L - 4) / n
+        widest = max(fm.horizontalAdvance(t) for t in self.names)
+        if widest + self.LABEL_GAP <= bw:
+            return list(range(n)), False, self.MARGIN_B
+        stride = max(1, math.ceil((fm.height() + 1) / bw))
+        return list(range(0, n, stride)), True, widest + 8
+
     def _plot_rect(self):
+        margin_b = self.label_layout()[2] if self.names else self.MARGIN_B
         return (self.MARGIN_L, self.MARGIN_T, max(1, self.width() - self.MARGIN_L - 4),
-                max(1, self.height() - self.MARGIN_T - self.MARGIN_B))
+                max(1, self.height() - self.MARGIN_T - margin_b))
 
     def index_at(self, x) -> int:
         left, _, w, _ = self._plot_rect()
@@ -770,18 +821,32 @@ class SpectrumView(QWidget):
                 p.setPen(QPen(QColor("#d04040"), 1))
                 cx = int(left + (self.cursor + 0.5) * bw)
                 p.drawLine(cx, top, cx, top + h)
-            if self.marker is not None and self.freqs[0] <= self.marker <= self.freqs[-1]:
-                span = (self.freqs[-1] - self.freqs[0]) or 1
-                mx = int(left + (self.marker - self.freqs[0]) / span * (w - bw) + bw / 2)
+            if self.marker is not None and 0 <= self.marker < n:
                 p.setPen(QPen(QColor("#30a030"), 2))
+                mx = int(left + (self.marker + 0.5) * bw)
                 p.drawLine(mx, top, mx, top + h)
-            p.setPen(text)                               # frequency labels: ends and middle
-            for i, align in ((0, Qt.AlignLeft), (n // 2, Qt.AlignHCenter), (n - 1, Qt.AlignRight)):
-                x = left + (i + 0.5) * bw
-                label = P.format_mhz(self.freqs[i], 4)
-                fw = p.fontMetrics().horizontalAdvance(label)
-                lx = {Qt.AlignLeft: left, Qt.AlignRight: left + w - fw}.get(align, x - fw / 2)
-                p.drawText(int(lx), top + h + 14, label)
+            p.setPen(text)
+            fm = p.fontMetrics()
+            if self.names:                               # memory names, as many as fit
+                indices, upright, _m = self.label_layout()
+                for i in indices:
+                    cx = left + (i + 0.5) * bw
+                    tw = fm.horizontalAdvance(self.names[i])
+                    if upright:                          # reads upwards, ending at the axis
+                        p.save()
+                        p.translate(cx + (fm.ascent() - fm.descent()) / 2, top + h + 4 + tw)
+                        p.rotate(-90)
+                        p.drawText(0, 0, self.names[i])
+                        p.restore()
+                    else:
+                        p.drawText(int(cx - tw / 2), top + h + 14, self.names[i])
+            else:                                        # frequencies: ends and middle
+                for i, align in ((0, Qt.AlignLeft), (n // 2, Qt.AlignHCenter), (n - 1, Qt.AlignRight)):
+                    x = left + (i + 0.5) * bw
+                    label = P.format_mhz(self.freqs[i], 4)
+                    fw = fm.horizontalAdvance(label)
+                    lx = {Qt.AlignLeft: left, Qt.AlignRight: left + w - fw}.get(align, x - fw / 2)
+                    p.drawText(int(lx), top + h + 14, label)
         p.setPen(grid)
         p.drawRect(left, top, w, h)
         p.end()
@@ -789,55 +854,156 @@ class SpectrumView(QWidget):
     def mouseMoveEvent(self, ev):
         i = self.index_at(ev.position().x())
         if i >= 0:
-            self.hovered.emit(self.freqs[i], self.peaks[i])
+            self.hovered.emit(i)
 
     def mousePressEvent(self, ev):
         i = self.index_at(ev.position().x())
         if ev.button() == Qt.LeftButton and i >= 0:
-            self.clicked.emit(self.freqs[i])
+            self.clicked.emit(i)
+
+
+class MemoryListDialog(QDialog):
+    """Tick the memories of a scan list (the memories read so far)."""
+
+    def __init__(self, main: "MainWindow", name: str, ids, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Scan list: {name}")
+        data = main.memories.data
+        order = [m for m in P.memory_ids() if m.isdigit()]
+        used = {m for m in order if data.get(m) is not None}
+        lay = QVBoxLayout(self)
+        self.list = QListWidget()
+        self.list.setFont(mono_font(self.font().pointSize()))
+        for memid in [m for m in order if m in used or m in ids]:
+            item = QListWidgetItem(memory_label(memid, data))
+            item.setData(Qt.UserRole, memid)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if memid in ids else Qt.Unchecked)
+            self.list.addItem(item)
+        lay.addWidget(self.list, 1)
+        unread = sum(m not in data for m in order)
+        if unread:
+            hint = QLabel(f"{unread} memories not read yet are not listed: Read all on the Memories tab.")
+            hint.setStyleSheet("color: gray")
+            lay.addWidget(hint)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self.resize(320, 420)
+
+    def ids(self) -> list:
+        items = (self.list.item(i) for i in range(self.list.count()))
+        return [it.data(Qt.UserRole) for it in items if it.checkState() == Qt.Checked]
 
 
 class ScanTab(QWidget):
-    """Band sweep: step the VFO, read the S-meter, plot; click the plot to tune."""
+    """Band sweep (step the VFO over a range) or memory scan (put each memory of a
+    list on the VFO), reading the S-meter and plotting it; hold on a signal; click
+    the plot to tune there."""
 
     def __init__(self, main: "MainWindow"):
         super().__init__()
         self.main = main
-        self.saved = None                 # radio state from sweep_begin while sweeping
+        self.saved = None                 # radio state from sweep_begin while scanning
         self.running = False
         self.stop_requested = False
-        self.tune_to: int | None = None
+        self.tune_to: int | None = None   # point to stay on when the scan stops
         self.index = 0
         self.t_sweep = 0.0
+        self.channels: list = []          # memory scan: (memid, Channel) per point
+        self.holding = False
+        self.hold_index = -1
+        self.poll_pending = False
+        self.quiet_since: float | None = None
+        self.lists = self._load_lists()   # scan lists: name -> [memid]
         lay = QVBoxLayout(self)
+
         row = QHBoxLayout()
+        self.mode = QComboBox()
+        self.mode.addItems(["Band sweep", "Memory scan"])
+        self.mode.currentIndexChanged.connect(self._mode_changed)
+        row.addWidget(self.mode)
         row.addWidget(QLabel("Band"))
         self.band = QComboBox()
         self.band.addItems(P.BANDS)
         row.addWidget(self.band)
-        row.addWidget(QLabel("From"))
+        self.range_box = QWidget()
+        rl = QHBoxLayout(self.range_box)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(QLabel("From"))
         self.start_mhz = QLineEdit("144.000")
         self.start_mhz.setMaximumWidth(90)
-        row.addWidget(self.start_mhz)
-        row.addWidget(QLabel("to"))
+        rl.addWidget(self.start_mhz)
+        rl.addWidget(QLabel("to"))
         self.stop_mhz = QLineEdit("148.000")
         self.stop_mhz.setMaximumWidth(90)
-        row.addWidget(self.stop_mhz)
-        row.addWidget(QLabel("MHz  step"))
+        rl.addWidget(self.stop_mhz)
+        rl.addWidget(QLabel("MHz  step"))
         self.step = QComboBox()
         self.step.addItems([f"{s:g}" for s in P.STEPS_KHZ])
         self.step.setCurrentText("25")
-        row.addWidget(self.step)
-        row.addWidget(QLabel("kHz  dwell"))
+        rl.addWidget(self.step)
+        rl.addWidget(QLabel("kHz"))
+        row.addWidget(self.range_box)
+        self.mem_box = QWidget()
+        ml = QHBoxLayout(self.mem_box)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.addWidget(QLabel("Memories"))
+        self.mem_list = QComboBox()
+        self.mem_list.setToolTip("Every memory (or those in one frequency band; locked-out ones "
+                                 "skipped, as the radio's own scan does), or a list of your own")
+        ml.addWidget(self.mem_list)
+        b = QPushButton("New list…")
+        b.clicked.connect(self.new_list)
+        ml.addWidget(b)
+        self.edit_btn = QPushButton("Edit…")
+        self.edit_btn.clicked.connect(self.edit_list)
+        ml.addWidget(self.edit_btn)
+        self.del_btn = QPushButton("Delete")
+        self.del_btn.clicked.connect(self.delete_list)
+        ml.addWidget(self.del_btn)
+        self.mem_list.currentIndexChanged.connect(self._list_buttons)
+        self._fill_mem_lists()
+        self.mem_box.setVisible(False)
+        row.addWidget(self.mem_box)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("dwell"))
         self.dwell = QSpinBox()
         self.dwell.setRange(0, 2000)
         self.dwell.setSingleStep(25)
         self.dwell.setSuffix(" ms")
         self.dwell.setValue(SWEEP_DWELL_MS)
-        self.dwell.setToolTip("Time for the receiver to settle at each frequency before the S-meter is read")
+        self.dwell.setToolTip("Time for the receiver to settle at each point before the S-meter is read")
         row.addWidget(self.dwell)
+        row.addSpacing(12)
+        row.addWidget(QLabel("on S"))
+        self.threshold = QSpinBox()
+        self.threshold.setRange(1, S_MAX)
+        self.threshold.setToolTip("The S-meter reading that counts as a signal")
+        row.addWidget(self.threshold)
+        row.addWidget(QLabel("or more:"))
+        self.on_signal = QComboBox()
+        for label, key in ON_SIGNAL:
+            self.on_signal.addItem(label, key)
+        self.on_signal.setCurrentIndex(1)
+        self.on_signal.setToolTip("Hold for: stay the given time. Hold until it drops: stay while "
+                                  "the signal lasts, then the given time more. Stop, or a click "
+                                  "on the graph, ends a hold.")
+        self.on_signal.currentIndexChanged.connect(
+            lambda _i: self.hold.setEnabled(self.on_signal.currentData() != "go"))
+        row.addWidget(self.on_signal)
+        self.hold = QSpinBox()
+        self.hold.setRange(0, 600)
+        self.hold.setSuffix(" s")
+        self.hold.setValue(HOLD_S)
+        row.addWidget(self.hold)
+        row.addSpacing(12)
         self.repeat = QCheckBox("Repeat")
-        self.repeat.setToolTip("Sweep again and again until Stop; the faint bars hold the peaks")
+        self.repeat.setToolTip("Scan again and again until Stop; the faint bars hold the peaks")
         row.addWidget(self.repeat)
         self.go = QPushButton("Start")
         self.go.clicked.connect(self.toggle)
@@ -847,23 +1013,112 @@ class ScanTab(QWidget):
         row.addWidget(clear)
         row.addStretch(1)
         lay.addLayout(row)
+
         self.view = SpectrumView()
         self.view.clicked.connect(self.tune)
-        self.view.hovered.connect(lambda hz, s: self.info.setText(
-            f"{P.format_mhz(hz)} MHz  " + (f"S{s}" if s is not None else "-") + "   (click to tune)"))
+        self.view.hovered.connect(self._hover)
         lay.addWidget(self.view, 1)
-        self.info = QLabel("Sweeps the band's VFO and plots the S-meter. Click the graph to tune there.")
+        self.info = QLabel("Sweeps the band's VFO, or scans memories, and plots the S-meter. "
+                           "Click the graph to tune there.")
         lay.addWidget(self.info)
+        self.hold_timer = QTimer(self)
+        self.hold_timer.setSingleShot(True)
+        self.hold_timer.timeout.connect(self._hold_over)
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(HOLD_POLL_MS)
+        self.poll_timer.timeout.connect(self._poll)
 
-    # -- sweep ---------------------------------------------------------------
+    @property
+    def step_khz(self) -> float:
+        return float(self.step.currentText())
+
+    def _mode_changed(self, mode):
+        self.range_box.setVisible(mode == SCAN_SWEEP)
+        self.mem_box.setVisible(mode == SCAN_MEMORIES)
+
+    # -- scan lists ----------------------------------------------------------
+    def _load_lists(self) -> dict:
+        store = self.main.store
+        try:
+            lists = json.loads(store.value("scan/lists", "{}")) if store is not None else {}
+            return {str(k): [str(m) for m in v] for k, v in lists.items()}
+        except (TypeError, ValueError, AttributeError):
+            return {}
+
+    def _save_lists(self):
+        if self.main.store is not None:
+            self.main.store.setValue("scan/lists", json.dumps(self.lists))
+
+    def _fill_mem_lists(self, select=None):
+        current = select or self.mem_list.currentData()
+        self.mem_list.blockSignals(True)
+        self.mem_list.clear()
+        # item data "all", "band:<i>" or "list:<name>" (strings: findData compares them)
+        self.mem_list.addItem("All memories", "all")
+        for i, (lo, hi) in enumerate(P.FREQ_BANDS):
+            self.mem_list.addItem(f"All {FREQ_BAND_NAMES[i]} ({lo / 1e6:g}-{hi / 1e6:g} MHz)", f"band:{i}")
+        for name in sorted(self.lists):
+            self.mem_list.addItem(f"List: {name}", f"list:{name}")
+        i = self.mem_list.findData(current) if current is not None else -1
+        self.mem_list.setCurrentIndex(max(i, 0))
+        self.mem_list.blockSignals(False)
+        self._list_buttons()
+
+    def _current_list(self):
+        """("all", None), ("band", index into P.FREQ_BANDS) or ("list", name)."""
+        kind, _, arg = (self.mem_list.currentData() or "all").partition(":")
+        return kind, int(arg) if kind == "band" else (arg or None)
+
+    def _list_buttons(self, *_):
+        is_list = self._current_list()[0] == "list"
+        self.edit_btn.setEnabled(is_list)
+        self.del_btn.setEnabled(is_list)
+
+    def new_list(self):
+        name, ok = QInputDialog.getText(self, "New scan list", "Name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name in self.lists:
+            self.main.error(f"there is already a list {name!r}")
+            return
+        dlg = MemoryListDialog(self.main, name, [], self)
+        if dlg.exec():
+            self.lists[name] = dlg.ids()
+            self._save_lists()
+            self._fill_mem_lists(f"list:{name}")
+
+    def edit_list(self):
+        kind, name = self._current_list()
+        if kind != "list":
+            return
+        dlg = MemoryListDialog(self.main, name, self.lists.get(name, []), self)
+        if dlg.exec():
+            self.lists[name] = dlg.ids()
+            self._save_lists()
+
+    def delete_list(self):
+        kind, name = self._current_list()
+        if kind != "list":
+            return
+        if QMessageBox.question(self, "Delete scan list", f"Delete the list {name!r}?") \
+                != QMessageBox.Yes:
+            return
+        del self.lists[name]
+        self._save_lists()
+        self._fill_mem_lists()
+
+    # -- scan ----------------------------------------------------------------
     def toggle(self):
         if self.running:
-            self.stop_requested = True
-            self.go.setEnabled(False)          # until the band is put back
+            self._request_stop()
         else:
             self.start()
 
     def start(self):
+        if self.mode.currentIndex() == SCAN_MEMORIES:
+            self._start_memories()
+            return
         try:
             freqs = P.sweep_frequencies(P.parse_frequency(self.start_mhz.text()),
                                         P.parse_frequency(self.stop_mhz.text()), self.step_khz)
@@ -877,16 +1132,63 @@ class ScanTab(QWidget):
             self.main.error(f"{len(freqs)} points: narrow the range or use a larger step "
                             f"(at most {SWEEP_MAX_POINTS})")
             return
-        self.view.set_frequencies(freqs)
+        self.channels = []
+        self.view.set_points(freqs)
+        self._begin()
+
+    def _start_memories(self):
+        kind, arg = self._current_list()
+        ids = self.lists.get(arg, []) if kind == "list" else [m for m in P.memory_ids() if m.isdigit()]
+        data = self.main.memories.data
+        unread = [m for m in ids if m not in data]
+        if unread:                             # read them first, then start again
+            if self.main.radio is None:
+                self.main.error("not connected")
+                return
+
+            def job(progress):
+                r, out = self.main.radio, {}
+                for n, memid in enumerate(unread):
+                    out[memid] = r.read_memory(memid)
+                    progress(n + 1)
+                return out
+
+            def done(mems):
+                for memid, ch in mems.items():
+                    self.main.memories.update_row(memid, ch)
+                self.go.setEnabled(True)
+                self._start_memories()
+
+            self.go.setEnabled(False)
+            self.main.run_job(job, done, lambda e: (self.go.setEnabled(True), self.main.error(e)),
+                              lambda n: self.info.setText(f"reading memories: {n}/{len(unread)}"))
+            return
+        chans = []
+        for memid in ids:
+            ch = data.get(memid)
+            if ch is None:
+                continue
+            if kind != "list" and ch.lockout:          # the radio's own memory scan skips these
+                continue
+            if kind == "band" and P.freq_band(ch.freq) != P.FREQ_BANDS[arg]:
+                continue
+            chans.append((memid, ch))
+        if not chans:
+            self.main.error("no memories to scan in that list")
+            return
+        self.channels = chans
+        # axis names as in the memory lists: the name, or the frequency if it has none
+        self.view.set_points([ch.freq for _m, ch in chans], [m for m, _ch in chans],
+                             [ch.name.strip() or P.format_mhz(ch.freq, 3) for _m, ch in chans])
+        self._begin()
+
+    def _begin(self):
         self.running, self.stop_requested, self.tune_to, self.index = True, False, None, 0
         self.go.setText("Stop")
         self.band.setEnabled(False)
+        self.mode.setEnabled(False)
         band = self.band.currentIndex()
         self.main.run(lambda r: r.sweep_begin(band), self._begun, self._failed)
-
-    @property
-    def step_khz(self) -> float:
-        return float(self.step.currentText())
 
     def _begun(self, saved):
         self.saved = saved
@@ -894,48 +1196,146 @@ class ScanTab(QWidget):
         self.main.refresh_band(saved["band"])    # now in VFO mode
         self._next()
 
+    def _point_text(self, i) -> str:
+        hz = self.view.freqs[i]
+        if self.view.labels is None:
+            return f"{P.format_mhz(hz)} MHz"
+        memid = self.view.labels[i]
+        ch = self.main.memories.data.get(memid)
+        name = ch.name.strip() if ch is not None else ""
+        return f"{memid} {name + ' ' if name else ''}{P.format_mhz(hz, 3)} MHz"
+
     def _next(self):
         if self.stop_requested or self.main.radio is None:
             self._finish()
             return
         if self.index >= len(self.view.freqs):
             took = time.monotonic() - self.t_sweep
-            self.info.setText(f"sweep of {len(self.view.freqs)} points took {took:.1f} s")
+            self.info.setText(f"scan of {len(self.view.freqs)} points took {took:.1f} s")
             if not self.repeat.isChecked():
                 self._finish()
                 return
-            self.view.set_frequencies(self.view.freqs)   # keeps the peaks
+            self.view.set_points(self.view.freqs, self.view.labels)   # keeps the peaks
             self.index, self.t_sweep = 0, time.monotonic()
-        i, hz, saved = self.index, self.view.freqs[self.index], self.saved
-        step, settle = self.step_khz, self.dwell.value() / 1000
+        i, saved, settle = self.index, self.saved, self.dwell.value() / 1000
+        self.view.set_cursor(i)
+        if self.channels:
+            ch = self.channels[i][1]
+            shown = ch.replace(reverse=False)
+
+            def job(r):
+                return r.scan_point(saved, ch, settle)
+        else:
+            hz, step = self.view.freqs[i], self.step_khz
+            shown = D7Radio.sweep_channel(saved, hz, step)
+
+            def job(r):
+                return r.sweep_point(saved, hz, step, settle)
 
         def done(level):
             self.view.set_level(i, level)
             if level is not None:              # the radio does not report PC changes: follow it
-                self.main.radio_tab.panels[saved["band"]].show_channel(
-                    D7Radio.sweep_channel(saved, hz, step))
+                self.main.radio_tab.panels[saved["band"]].show_channel(shown)
             self.index += 1
-            self._next()
-        self.main.run(lambda r: r.sweep_point(saved, hz, step, settle), done, self._failed)
+            if (level is not None and level >= self.threshold.value()
+                    and self.on_signal.currentData() != "go" and not self.stop_requested):
+                self._hold(i, level)
+            else:
+                self._next()
+        self.main.run(job, done, self._failed)
+
+    # -- hold on a signal ------------------------------------------------------
+    def _hold(self, i, level):
+        self.holding, self.hold_index = True, i
+        secs = self.hold.value()
+        where = f"S{level} on {self._point_text(i)}"
+        if self.on_signal.currentData() == "time":
+            self.info.setText(f"{where}: holding {secs} s (Stop, or click the graph to stay on a point)")
+            self.hold_timer.start(secs * 1000)
+        else:
+            self.quiet_since = None
+            self.info.setText(f"{where}: holding until it drops, then {secs} s "
+                              "(Stop, or click the graph to stay on a point)")
+            self.poll_timer.start()
+
+    def _poll(self):
+        """While holding until the signal drops: read the S-meter."""
+        if self.poll_pending or self.saved is None:
+            return
+        self.poll_pending = True
+        b, i = self.saved["band"], self.hold_index
+
+        def done(level):
+            self.poll_pending = False
+            if not self.holding:               # Stop came while this was out
+                if self.stop_requested:
+                    self._finish()
+                return
+            self.view.set_level(i, level)
+            self.main.radio_tab.panels[b].smeter.setValue(level)
+            now = time.monotonic()
+            if level >= self.threshold.value():
+                self.quiet_since = None
+                return
+            if self.quiet_since is None:
+                self.quiet_since = now
+            if now - self.quiet_since >= self.hold.value():
+                self._hold_over()
+        self.main.run(lambda r: r.get_smeter(b), done, self._failed)
+
+    def _hold_over(self):
+        self.holding = False
+        self.hold_timer.stop()
+        self.poll_timer.stop()
+        self._next()
+
+    def _request_stop(self):
+        self.stop_requested = True
+        self.go.setEnabled(False)              # until the band is put back
+        if self.holding:                       # no point is being measured
+            self.holding = False
+            self.hold_timer.stop()
+            self.poll_timer.stop()
+            if not self.poll_pending:          # else the poll's answer finishes
+                self._finish()
 
     def _finish(self):
         saved, tune, step = self.saved, self.tune_to, self.step_khz
         if saved is None or self.main.radio is None:
             self._idle()
             return
+        if tune is not None and self.view.labels is not None:
+            memid = self.view.labels[tune]
+
+            def job(r):
+                r.sweep_end(saved, memid=memid)
+            told = f"recalled memory {memid} on band {P.BANDS[saved['band']]}"
+        elif tune is not None:
+            hz = self.view.freqs[tune]
+
+            def job(r):
+                r.sweep_end(saved, hz, step)
+            told = f"tuned band {P.BANDS[saved['band']]} to {P.format_mhz(hz)} MHz"
+        else:
+            def job(r):
+                r.sweep_end(saved)
+            told = None
 
         def done(_):
             self._idle()
             self.main.refresh_band(saved["band"])
-            if tune is not None:
-                self.info.setText(f"tuned band {P.BANDS[saved['band']]} to {P.format_mhz(tune)} MHz")
-        self.main.run(lambda r: r.sweep_end(saved, tune, step), done, self._failed)
+            if told:
+                self.info.setText(told)
+        self.main.run(job, done, self._failed)
 
     def _failed(self, exc):
         self._idle()
         self.main.error(exc)
 
     def _idle(self):
+        self.hold_timer.stop()
+        self.poll_timer.stop()
+        self.holding = False
         self.running = False
         self.saved = None
         self.view.cursor = -1
@@ -943,26 +1343,40 @@ class ScanTab(QWidget):
         self.go.setText("Start")
         self.go.setEnabled(True)
         self.band.setEnabled(True)
+        self.mode.setEnabled(True)
 
     # -- click to tune -------------------------------------------------------
-    def tune(self, hz: int):
-        self.view.marker = hz
-        self.view.update()
-        if self.running:                       # stop, and leave the band on hz
-            self.tune_to = hz
-            self.stop_requested = True
-            self.go.setEnabled(False)
-            return
-        band, step = self.band.currentIndex(), self.step_khz
+    def _hover(self, i):
+        level = self.view.peaks[i]
+        self.info.setText(f"{self._point_text(i)}  " + (f"S{level}" if level is not None else "-")
+                          + "   (click to tune)")
 
-        def job(r):
-            if r.get_band_mode(band) != 0:
-                r.set_band_mode(band, 0)
-            r.update_vfo(band, freq=hz, step=P.step_index(step))
+    def tune(self, i: int):
+        self.view.marker = i
+        self.view.update()
+        if self.running:                       # stop, and leave the band there
+            self.tune_to = i
+            self._request_stop()
+            return
+        band = self.band.currentIndex()
+        if self.view.labels is not None:
+            memid = self.view.labels[i]
+
+            def job(r):
+                r.recall_memory(band, memid)
+            told = f"recalled memory {memid} on band {P.BANDS[band]}"
+        else:
+            hz, step = self.view.freqs[i], self.step_khz
+
+            def job(r):
+                if r.get_band_mode(band) != 0:
+                    r.set_band_mode(band, 0)
+                r.update_vfo(band, freq=hz, step=P.step_index(step))
+            told = f"tuned band {P.BANDS[band]} to {P.format_mhz(hz)} MHz"
 
         def done(_):
             self.main.refresh_band(band)
-            self.info.setText(f"tuned band {P.BANDS[band]} to {P.format_mhz(hz)} MHz")
+            self.info.setText(told)
         self.main.run(job, done)
 
 
