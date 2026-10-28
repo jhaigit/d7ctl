@@ -86,7 +86,9 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   `APO` `0` Off (no second field), `1,0` 30 min, `2,0` 60 min; `TXI` 0-7 = 0.5, 1, 2, 3, 5, 10,
   20, 30 min (no 4 min, unlike the first table); `SV` 0 Off, 1 0.2 s,
   5 1.0 s, 9 5 s; `DL` 0 single band, 1 dual. The TH-D7A has no 1750 Hz
-  menu item, and answers `N` to `TH`.
+  menu item, and answers `N` to `TH` and to `TT` (no tone is sent). The GUI
+  greys out its 1750 Hz button when `TH` is refused.
+- `RX` answers a bare `RX` (no argument).
 - A command arriving on the PC port cancels the radio's menu mode, so
   polling (the GUI's Poll meters) makes the menus unusable.
 - With the TNC in PACKET mode the TNC answers instead: `ID` gives `cmd:ID`
@@ -103,8 +105,8 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
 3. (Resolved 2026-10-27: `SV` is one digit, 0 Off, 1 0.2 s ... 9 5 s.)
 4. (Resolved 2026-10-27: `DL` 0 single band, 1 dual.)
 5. (Resolved 2026-10-27: `TXI` 0-7 = 0.5, 1, 2, 3, 5, 10, 20, 30 min.)
-6. Replies to `MW`, `TX`, `RX`, `TT`, `UP`, `DW` - the driver accepts any
-   reply starting with the mnemonic.
+6. Replies to `MW`, `TX`, `UP`, `DW` - the driver accepts any reply starting
+   with the mnemonic. (`RX` answers `RX`; `TT` on the TH-D7A answers `N`.)
 7. `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
 8. **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
    always 0 so far; meaning unknown. The driver writes the same forms it

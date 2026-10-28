@@ -127,3 +127,13 @@ def test_gui_about(app):
     assert f"d7ctl {i['version']}" in text and i["commit"] in text and i["date"] in text
     assert ("uncommitted changes" in text) is i["dirty"]
     win.close()
+
+
+def test_gui_1750_button_follows_the_radio(app):
+    for port, enabled in (("emulator:D7", False), ("emulator", True)):   # TH-D7A, TH-D7G
+        win = MainWindow(port)
+        win.show()
+        win.toggle_connection()
+        assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+        assert win.radio_tab.t1750.isEnabled() is enabled
+        win.close()

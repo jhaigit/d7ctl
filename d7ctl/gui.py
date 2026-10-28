@@ -1546,6 +1546,7 @@ class MainWindow(QMainWindow):
             self.console.note(f"connected: {model} on {port}")
             self.set_connected(True)
             self.settings_tab.build(model)
+            self.check_1750()
             self.refresh_all()
             self.settings_tab.read_all()
 
@@ -1555,6 +1556,17 @@ class MainWindow(QMainWindow):
             self.error(f"cannot connect on {port}: {exc}")
 
         self.worker.submit(lambda: radio.open(auto_info=live), opened, failed)
+
+    def check_1750(self):
+        """Grey out the 1750 Hz button on radios without the tone. The TH-D7A and
+        TH-D7E both report ID TH-D7, so ask: the A answers N to TH (1750 Hz hold)
+        and to TT itself (2026-10-27). TH is only a read, nothing transmits."""
+        def done(ok):
+            b = self.radio_tab.t1750
+            b.setEnabled(ok)
+            b.setToolTip("Transmits a 1750 Hz tone (repeater access) while held" if ok else
+                         "This radio has no 1750 Hz tone (it refuses TH and TT)")
+        self.run(lambda r: r.command("TH", check=False) not in P.ERROR_REPLIES, done)
 
     def disconnect_radio(self):
         radio, self.radio = self.radio, None

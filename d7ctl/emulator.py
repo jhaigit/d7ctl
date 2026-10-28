@@ -266,12 +266,14 @@ class Emulator:
         return "TX 0"
 
     def _cmd_TT(self, args):
+        if self.model == "TH-D7":                    # the TH-D7A has no 1750 Hz tone: N
+            return "N"
         self.tx = True
         return "TT 0"
 
     def _cmd_RX(self, args):
         self.tx = False
-        return "RX 0"
+        return "RX"                                  # bare, as the TH-D7A answers
 
     def _cmd_UP(self, args):
         return self._knob(+1, "UP")
