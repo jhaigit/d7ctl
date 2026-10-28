@@ -6,6 +6,13 @@ menu setting, all memories (000-199, program-scan L0-U9, the two call
 channels), PTT, and raw commands. It also includes a simulated radio, so
 everything can be tried without one.
 
+![The Radio panel: both bands, S-meters, memory recall, PTT, and the Console](docs/radio.png)
+
+![A band sweep of 146-147 MHz in the Scan panel](docs/scan.png)
+
+The screenshots show the built-in emulator (`tools/screenshots.py` makes
+them again).
+
 ## Install
 ```sh
 python3 -m venv .venv

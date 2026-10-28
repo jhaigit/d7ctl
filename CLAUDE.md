@@ -13,6 +13,7 @@ since 2026-10-28 as https://github.com/jhaigit/d7ctl (remote `origin`), MIT lice
 - `d7ctl/emulator.py` — simulated radio (in-process `emulator` port, or `d7ctl-emulator` on a pty)
 - `d7ctl/memfile.py` — CHIRP-format CSV, JSON backup
 - `d7ctl/cli.py`, `d7ctl/gui.py` (PySide6; all radio I/O on one FIFO worker thread)
+- `tools/screenshots.py` — remakes the README images in `docs/` (offscreen, emulator)
 - `PROTOCOL.md` — command set, sources, and the list of details unverified on hardware
 
 ## Rules
