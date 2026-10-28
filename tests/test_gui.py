@@ -150,6 +150,10 @@ def test_gui_memory_name_editor_stops_at_eight(app):
     editor.clear()
     QtTest.QTest.keyClicks(editor, "A,B")
     assert editor.text() == "AB"                     # no commas
+    # plain ASCII only (keyClicks cannot type é, so ask the validator)
+    Valid = pytest.importorskip("PySide6.QtGui").QValidator.State
+    assert editor.validator().validate("Café", 4)[0] == Valid.Invalid
+    assert editor.validator().validate("Caf ~;", 6)[0] == Valid.Acceptable
     # the Memories table's Name column edits with such an editor
     win = MainWindow("emulator")
     t = win.memories.table

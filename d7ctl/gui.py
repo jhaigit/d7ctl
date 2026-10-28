@@ -135,9 +135,10 @@ def mono_font(size: int, bold: bool = False) -> QFont:
 
 
 def limit_to_memory_name(edit: QLineEdit) -> QLineEdit:
-    """Stop typing at what MNA can store: NAME_LEN characters, no comma (the field separator)."""
+    """Stop typing at what MNA can store: NAME_LEN characters of plain ASCII, no comma."""
     edit.setMaxLength(P.NAME_LEN)
-    edit.setValidator(QRegularExpressionValidator(QRegularExpression(f"[^,]{{0,{P.NAME_LEN}}}"), edit))
+    edit.setValidator(QRegularExpressionValidator(
+        QRegularExpression(f"{P.NAME_CHAR_CLASS}{{0,{P.NAME_LEN}}}"), edit))
     edit.setPlaceholderText(f"up to {P.NAME_LEN} characters")
     return edit
 

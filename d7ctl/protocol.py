@@ -14,6 +14,7 @@ understand the command, or "N" when the command is not possible now
 from __future__ import annotations
 
 import dataclasses
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -56,6 +57,9 @@ SMETER_MAX = 5             # SM reports 0 .. 5 bars
 
 MEMORY_COUNT = 200         # memories 000-199
 NAME_LEN = 8               # memory names, MNA
+# Printable ASCII but the comma (the field separator). Above 127 the TH-D7A
+# stores a space: "MNA 0,199,Café" reads back "Caf ", "µ" a space (2026-10-28).
+NAME_CHAR_CLASS = "[ -+\\--~]"
 # Program-scan edge memories, in the radio's own order.
 PSCAN_IDS = tuple(f"{edge}{n}" for n in range(10) for edge in "LU")
 CALL_IDS = ("CALL0", "CALL1")        # CR/CW index 0 = VHF call, 1 = UHF call
@@ -313,8 +317,9 @@ class Channel:
             raise ValueError("bad mode")
         if not 0 <= self.offset < 10**9:
             raise ValueError("offset out of range")
-        if len(self.name) > NAME_LEN or "," in self.name:
-            raise ValueError(f"name must be at most {NAME_LEN} characters, no commas")
+        if len(self.name) > NAME_LEN or not re.fullmatch(f"{NAME_CHAR_CLASS}*", self.name):
+            raise ValueError(f"name must be at most {NAME_LEN} characters of plain ASCII, "
+                             "no commas")
 
 
 # ---------------------------------------------------------------------------

@@ -354,7 +354,8 @@ class Emulator:
             name = ",".join(args[2:])
             if len(name) > P.NAME_LEN:
                 return "N"
-            ch.name = name
+            # the TH-D7A stores a space for a byte above 127 (2026-10-28: é)
+            ch.name = "".join(c if ord(c) < 128 else " " for c in name)
         return f"MNA 0,{memid},{ch.name}"
 
     def _cmd_CR(self, args):

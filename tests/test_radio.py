@@ -242,3 +242,15 @@ def test_band_status_names_the_memory(radio):
     assert st["memory"] == "000" and st["name"] == "W1AW RPT"
     radio.set_band_mode(0, "VFO")
     assert radio.band_status(0)["name"] == ""
+
+
+def test_memory_names_are_plain_ascii(radio):
+    # the TH-D7A stores a space for é (2026-10-28); the driver refuses such names first
+    with pytest.raises(ValueError):
+        radio.write_memory(199, P.Channel(freq=146_520_000, step=3, name="Café"))
+    for bad in ("A,B", "Café"):
+        with pytest.raises(ValueError):
+            P.Channel(freq=146_520_000, step=3, name=bad).validate()
+    P.Channel(freq=146_520_000, step=3, name=" !+-~;Az").validate()
+    radio.write_memory(199, P.Channel(freq=146_520_000, step=3))
+    assert radio.command("MNA 0,199,Café") == "MNA 0,199,Caf "

@@ -99,6 +99,11 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
 - Trailing spaces are kept too (2026-10-28): `MNA 0,199,X   ` reads back
   with its three spaces. A name entered on the keys had none (`BA2uA`).
 - A channel write `MW 0,0,ccc,<spec>` answers a bare `MW` (2026-10-28).
+- A byte above 127 in a name is stored as a space (2026-10-28):
+  `MNA 0,199,Café` answers and reads back `Caf ` with no error, and
+  `MNA 0,199,µ` gives a single space. The emulator does the same for every
+  byte above 127. The driver
+  and the GUI name editors therefore accept only printable ASCII (no comma).
 - An empty name clears it: `MNA 0,050,` (as `write_memory` sends for a
   channel without a name).
 - A name entered on the radio's keys ([F], [9]) is reported with AI on as
@@ -134,8 +139,6 @@ match) and remove it here. Numbers are not stable; refer to the titles.
 - **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
   always 0 so far; meaning unknown. The driver writes the forms it reads;
   whether the radio also accepts `APO 1` alone is untested.
-- **Memory name characters above 127**, e.g. `Café` - stored, changed or
-  refused? ASCII punctuation and spaces are settled (see above).
 - Replies to `MW` for the split side (`MW 0,1,...`) and for an erase, and to
   `TX`, `UP`, `DW`: the driver accepts any reply starting with the mnemonic;
   the exact forms are not recorded yet.
