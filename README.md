@@ -97,3 +97,6 @@ Every feature is built and tested against the emulator. **None of it has
 been run against a real TH-D7 yet.** The protocol comes from published
 command lists and from the Hamlib and CHIRP drivers; `PROTOCOL.md` lists
 them and names the details to check first on hardware.
+
+## Licence
+MIT; see [LICENSE](LICENSE).

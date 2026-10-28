@@ -3,7 +3,8 @@
 Software project (not a build): Python GUI + CLI controlling a Kenwood
 TH-D7 / TH-D7G handheld over its serial PC port. Started 2026-10-24.
 No Redmine project and no `new-project.sh` skeleton (that skeleton is for
-CAD builds). Git repository since 2026-10-24 (branch `main`, no remote).
+CAD builds). Git repository since 2026-10-24 (branch `main`); public on GitHub
+since 2026-10-28 as https://github.com/jhaigit/d7ctl (remote `origin`), MIT licence.
 
 ## Layout
 - `d7ctl/protocol.py` — tables, `Channel`, wire spec encode/decode (pure)

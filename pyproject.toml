@@ -7,6 +7,7 @@ name = "d7ctl"
 version = "0.1.0"
 description = "Control a Kenwood TH-D7 / TH-D7G handheld over its serial port (GUI and command line)"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.9"
 dependencies = ["pyserial>=3.4"]
 
