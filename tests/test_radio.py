@@ -62,10 +62,16 @@ def test_memories_round_trip(radio):
                    ctcss_code=P.tone_code(123.0), name="TEST", lockout=True)
     radio.write_memory(150, ch)
     assert radio.read_memory("150") == ch
-    split = P.Channel(freq=145_800_000, step=3, tx_freq=437_800_000, name="SAT")
+    split = P.Channel(freq=145_200_000, step=3, tx_freq=147_450_000, name="ODD")
     radio.write_memory("151", split)
     back = radio.read_memory("151")
-    assert back.duplex == "split" and back.tx_freq == 437_800_000
+    assert back.duplex == "split" and back.tx_freq == 147_450_000
+    # the TH-D7A refuses the short split form and a cross-band split (2026-10-28)
+    assert radio.emulator.handle("MW 0,1,151,00147000000,0") == "N"
+    assert radio.emulator.handle("MW 0,1,151," + split.replace(tx_freq=446_000_000)
+                                 .split_side().spec(with_lockout=True)) == "N"
+    with pytest.raises(ValueError):
+        radio.write_memory("151", split.replace(tx_freq=446_000_000))
     radio.erase_memory(150)
     assert radio.read_memory(150) is None
     radio.write_memory("CALL1", P.Channel(freq=433_500_000, step=3))
@@ -254,3 +260,59 @@ def test_memory_names_are_plain_ascii(radio):
     P.Channel(freq=146_520_000, step=3, name=" !+-~;Az").validate()
     radio.write_memory(199, P.Channel(freq=146_520_000, step=3))
     assert radio.command("MNA 0,199,Café") == "MNA 0,199,Caf "
+
+
+def test_memory_step_is_reported_like_the_radio():
+    # with AI on, the TH-D7A reports a memory step as MC, MCL, MNA, BUF (2026-10-28)
+    from d7ctl.emulator import Emulator
+    emu = Emulator()
+    seen = []
+    emu.async_sink = seen.append
+    emu.handle("AI 1")
+    emu.handle(f"VMC {emu.control},2")
+    seen.clear()
+    assert emu.handle("UP") == "UP"
+    assert [line.split()[0] for line in seen] == ["MC", "MCL", "MNA", "BUF"]
+
+
+def test_memory_step_stays_in_the_frequency_band():
+    # from a 144 MHz memory the TH-D7A steps past airband ones on both bands (2026-10-28)
+    from d7ctl.emulator import Emulator
+    emu = Emulator()
+    emu.memories = {"024": P.Channel(freq=147_585_000, step=3),
+                    "030": P.Channel(freq=126_300_000, step=3, mode=1),
+                    "035": P.Channel(freq=121_500_000, step=3, mode=1),
+                    "036": P.Channel(freq=156_800_000, step=3)}
+    for b in (0, 1):
+        emu.handle(f"BC {b}")
+        emu.handle(f"VMC {b},2")
+        emu.handle(f"MC {b},024")
+        emu.handle("UP")
+        assert emu.handle(f"MC {b}") == f"MC {b},036"
+    emu.handle("MC 0,030")                            # from an airband memory
+    emu.handle("BC 0")
+    emu.handle("UP")
+    assert emu.handle("MC 0") == "MC 0,035"
+
+
+def test_empty_offset_field_reads_as_zero():
+    # seen from a TH-D7A on memory 100 (2026-10-28)
+    b, ch = P.parse_buf("BUF 1,00146880000,0,0,0,1,0,,13,,01,,0")
+    assert (b, ch.freq, ch.tone, ch.tone_code, ch.offset, ch.mode) == (1, 146_880_000, True, 13, 0, 0)
+
+
+def test_split_memory_reads_like_the_radio(radio):
+    # TH-D7A replies after a split write (2026-10-28)
+    radio.write_memory(199, P.Channel(freq=146_520_000, step=0, tx_freq=147_520_000, name="TestS"))
+    emu = radio.emulator
+    assert emu.handle("MR 0,1,199") == "MR 0,1,199,00147520000,0"
+    assert emu.handle("MR 0,0,199").endswith(",09,,09,,0,0")
+    assert radio.read_memory(199).tx_freq == 147_520_000
+
+
+def test_apo_without_its_second_field():
+    # the TH-D7A answers "APO 1" with "APO 1,0" (2026-10-28)
+    from d7ctl.emulator import Emulator
+    emu = Emulator()
+    assert emu.handle("APO 1") == "APO 1,0" and emu.handle("APO") == "APO 1,0"
+    assert emu.handle("APO 0") == "APO 0"

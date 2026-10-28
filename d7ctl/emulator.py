@@ -67,7 +67,7 @@ class Emulator:
             ("003", Channel(freq=144_390_000, step=3, name="APRS")),
             ("010", Channel(freq=162_550_000, step=6, name="WX1")),
             ("020", Channel(freq=121_500_000, step=6, mode=1, name="AIR GRD")),
-            ("021", Channel(freq=145_800_000, step=3, tx_freq=437_800_000, name="ISS XBND")),
+            ("021", Channel(freq=145_200_000, step=3, tx_freq=147_450_000, name="ODD SPLT")),
             ("L0", Channel(freq=144_000_000, step=3)),
             ("U0", Channel(freq=148_000_000, step=3)),
         ]
@@ -292,11 +292,18 @@ class Emulator:
     def _knob(self, d, mn):
         b = self.control
         if self.band_mode[b] == 2:
-            ids = sorted(k for k in self.memories if k.isdigit())
+            here = P.freq_band(self.vfo[b].freq)
+            ids = sorted(k for k, ch in self.memories.items()
+                         if k.isdigit() and P.freq_band(ch.freq) == here)
             if ids:
                 i = ids.index(self.mc[b]) if self.mc[b] in ids else 0
                 self.mc[b] = ids[(i + d) % len(ids)]
                 self._load_memory(b)
+                # the TH-D7A reports a memory step as MC, MCL, MNA, then BUF (2026-10-28)
+                ch = self.memories[self.mc[b]]
+                self._emit(f"MC {b},{self.mc[b]}")
+                self._emit(f"MCL {b},{int(ch.lockout)}")
+                self._emit(f"MNA 0,{self.mc[b]},{ch.name}")
         else:
             ch = self.vfo[b]
             ch.freq += d * int(ch.step_khz * 1000)
@@ -319,19 +326,31 @@ class Emulator:
         ch = self.memories.get(memid)
         if ch is None:
             return "N"
+        # The TH-D7A (2026-10-28) answers the split side in short form, TX frequency
+        # and one field (0; taken as the step), and leaves the offset field of a
+        # split memory empty: "MR 0,0,199,...,09,,09,,0,0" / "MR 0,1,199,00147520000,0".
         if split:
-            tx = ch.tx_freq if ch.tx_freq is not None else ch.freq
-            return f"MR 0,1,{memid},{tx:011d},{ch.step:X},0,0,0,0,,{ch.tone_code:02d},,{ch.ctcss_code:02d},000000000,0,0"
-        return f"MR 0,0,{memid}," + ch.spec(with_lockout=True)
+            if ch.duplex != "split":
+                return "N"
+            return f"MR 0,1,{memid},{ch.tx_freq:011d},{ch.step:X}"
+        fields = ch.spec_fields(with_lockout=True)
+        if ch.duplex == "split":
+            fields[10] = ""
+        return f"MR 0,0,{memid}," + ",".join(fields)
 
     def _cmd_MW(self, args):
         split, memid = args[1] == "1", P.normalise_memid(args[2])
         spec = args[3:]
         if split:
+            # the TH-D7A takes the full spec (TX frequency first) within one band and
+            # refuses the short form and a cross-band split (2026-10-28)
             ch = self.memories.get(memid)
-            if ch is None:
+            if ch is None or len(spec) < 12:
                 return "N"
-            ch.tx_freq = int(spec[0])
+            tx = int(spec[0])
+            if P.freq_band(tx) != P.freq_band(ch.freq):
+                return "N"
+            ch.tx_freq = tx
             ch.shift = 0
         elif not spec:
             self.memories.pop(memid, None)

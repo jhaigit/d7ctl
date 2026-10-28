@@ -21,7 +21,7 @@ def test_tune_and_freq(capsys):
 
 def test_mem_commands(capsys, tmp_path):
     code, out, _ = run(capsys, "mem", "list", "0-30")
-    assert code == 0 and "W1AW RPT" in out and "ISS XBND" in out
+    assert code == 0 and "W1AW RPT" in out and "ODD SPLT" in out
     code, out, _ = run(capsys, "mem", "write", "50", "freq=147.12", "shift=+", "offset=0.6", "name=NEW")
     assert code == 0 and "NEW" in out and "147.12000" in out
     code, out, err = run(capsys, "mem", "write", "60", "name=X")

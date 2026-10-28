@@ -498,7 +498,7 @@ class D7Radio:
         self.command("MNA", 0, memid, ch.name)
         if ch.tx_freq is not None and ch.shift == 0:
             time.sleep(WRITE_SETTLE)
-            self.command("MW", 0, 1, memid, f"{ch.tx_freq:011d}", f"{ch.step:X}")
+            self.command(f"MW 0,1,{memid}," + ch.split_side().spec(with_lockout=True))
 
     def erase_memory(self, memid) -> None:
         memid = P.normalise_memid(memid)

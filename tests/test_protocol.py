@@ -45,8 +45,10 @@ def test_channel_edits():
     assert ch.freq == 146_940_000 and ch.shift == 2 and ch.tone and not ch.ctcss
     ch = P.apply_channel_edits(ch, {"ctcss": "100"})
     assert ch.ctcss and not ch.tone
-    ch = P.apply_channel_edits(ch, {"txfreq": "437.8"})
+    ch = P.apply_channel_edits(ch, {"txfreq": "147.45"})
     assert ch.duplex == "split" and ch.shift == 0
+    with pytest.raises(ValueError):                   # cross-band: the TH-D7A refuses it
+        P.apply_channel_edits(ch, {"txfreq": "437.8"})
     with pytest.raises(ValueError):
         P.apply_channel_edits(ch, {"name": "TOOLONGNAME"})
 

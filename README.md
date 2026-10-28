@@ -55,7 +55,7 @@ d7ctl mode B mr ; d7ctl mem recall B 12
 d7ctl power A low ; d7ctl squelch B 3 ; d7ctl up A 4
 d7ctl mem list ; d7ctl mem list 0-49,L0,CALL0 --all
 d7ctl mem write 5 freq=146.94 shift=- offset=0.6 tone=100 name=W1AW
-d7ctl mem write 21 freq=145.8 txfreq=437.8 name=ISS      # odd split
+d7ctl mem write 21 freq=145.2 txfreq=147.45 name=ODD    # odd split (one band only)
 d7ctl mem store A 30 --name HOME ; d7ctl mem erase 30-39
 d7ctl mem export mem.csv ; d7ctl mem import mem.csv --dry-run
 d7ctl call V freq=146.52

@@ -77,7 +77,9 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
 - Some settings carry fields after the value: `APO 1,0` and `BEL 0,0,` (an
   empty last field). The driver decodes the first field and writes back the
   trailing fields as last read (`Setting.tail` when nothing was read yet).
-  What APO's second field means is not known.
+  What APO's second field means is not known. `APO 1` alone is accepted
+  and answered `APO 1,0`, which a read then returns (2026-10-28): the radio
+  fills in the second field itself.
 - A full backup read 61 memories and 76 of the 82 settings registered for
   the TH-D7. Not answered: `PC 1`, `ASC 1`, `BEL 1` (band B hidden, expected)
   and `TH` (`N`: exists, refused in the state the radio was in), `BEPT` and
@@ -98,7 +100,21 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   editor refuses.
 - Trailing spaces are kept too (2026-10-28): `MNA 0,199,X   ` reads back
   with its three spaces. A name entered on the keys had none (`BA2uA`).
-- A channel write `MW 0,0,ccc,<spec>` answers a bare `MW` (2026-10-28).
+- A channel write `MW 0,0,ccc,<spec>` answers a bare `MW` (2026-10-28), and
+  so does an erase, `MW 0,0,199`; `MR 0,0,199` then answers `N`.
+- The offset field can be empty: band B on memory 100 (146.88 MHz, simplex,
+  tone on) reported `BUF 1,00146880000,0,0,0,1,0,,13,,01,,0` (2026-10-28).
+  The decoder reads an empty number field as 0.
+- `UP` and `DW` answer a bare `UP` / `DW` (2026-10-28). They move the
+  control band like the knob; in MR mode they step the memory and wrap
+  (199 -> 000 and back). With AI on the radio then reports the new memory as
+  `MC 1,000`, `MCL 1,0` (its lockout), `MNA 0,000,Ch 0`, then `BUF 1,...`,
+  after the `UP` reply. The GUI refreshes on `MC` and ignores `MCL`.
+  They skip empty memories, and memories in another frequency band: from a
+  144 MHz memory both band B and band A step past the AM airband memories
+  (band A went from 024 to 036 over 030-035). From an airband memory band A
+  steps only through airband memories: `MC 0,030`, then `UP` gave 031, 032,
+  035, 040. The memories therefore stay within one frequency band.
 - A byte above 127 in a name is stored as a space (2026-10-28):
   `MNA 0,199,Café` answers and reads back `Caf ` with no error, and
   `MNA 0,199,µ` gives a single space. The emulator does the same for every
@@ -110,6 +126,17 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   `MNA 0,ccc,name` when the editor closes (2026-10-28: `MNA 0,199,BA2uA`).
   The GUI updates that memory's row, its lists and the band display.
 - `MR 0,1,ccc` (the odd-split side) answers `N` for a memory with no split.
+- Odd-split write (2026-10-28): the TH-D7A takes the full 13-field spec with
+  the transmit frequency first, `MW 0,1,199,00147000000,0,0,0,0,0,,09,,09,000000000,0,0`
+  (memory 199 receiving 146.52) -> `MW`. It refuses with `N` the short form
+  `MW 0,1,199,00446000000,0` (CHIRP's older kenwood_live) and a cross-band
+  split (446.00 on a 146.52 memory) in the 13- and 12-field forms. d7ctl
+  therefore writes the full spec and refuses a split across `FREQ_BANDS`.
+- Odd-split read (2026-10-28): after that write, `MR 0,1,199` answers the
+  short form `MR 0,1,199,00147520000,0`, and the main side reads back with an
+  empty offset field, `MR 0,0,199,00146520000,0,0,0,0,0,,09,,09,,0,0`,
+  although `000000000` was written. (Memory 100's empty offset in its `BUF`
+  above is probably the same mark of a split memory.)
 - A command arriving on the PC port cancels the radio's menu mode, so
   polling (the GUI's Poll meters) makes the menus unusable.
 - With the TNC in PACKET mode the TNC answers instead: `ID` gives `cmd:ID`
@@ -137,12 +164,16 @@ match) and remove it here. Numbers are not stable; refer to the titles.
 
 **Partly answered**
 - **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
-  always 0 so far; meaning unknown. The driver writes the forms it reads;
-  whether the radio also accepts `APO 1` alone is untested.
-- Replies to `MW` for the split side (`MW 0,1,...`) and for an erase, and to
-  `TX`, `UP`, `DW`: the driver accepts any reply starting with the mnemonic;
+  always 0 so far, and filled in by the radio when left out; meaning unknown.
+- **Odd-split details**: the field after the TX frequency in `MR 0,1` (0 so
+  far; the decoder takes it as the step); whether the short split write
+  `MW 0,1,ccc,<tx>,0` is accepted within one band (only tried cross-band).
+- Replies to `TX`: the driver accepts any reply starting with the mnemonic;
   the exact forms are not recorded yet.
-- `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
+- `SC`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
+  `MON` answers a read with `MON 0`; setting it is untried.
+- **`UP`/`DW` between 144 MHz and UHF memories**: band B covers both; does
+  it step over UHF memories from a 144 MHz one, as the emulator assumes?
 
 **Other models**
 - **TH-D7E / TH-D7(G)**: `TH` (1750 Hz hold) and `TT` on a radio that has the

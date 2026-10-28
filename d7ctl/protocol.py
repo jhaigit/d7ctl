@@ -60,6 +60,17 @@ NAME_LEN = 8               # memory names, MNA
 # Printable ASCII but the comma (the field separator). Above 127 the TH-D7A
 # stores a space: "MNA 0,199,Café" reads back "Caf ", "µ" a space (2026-10-28).
 NAME_CHAR_CLASS = "[ -+\\--~]"
+# Frequency bands, Hz. Memory UP/DW stays inside the band of the current memory,
+# and an odd split must stay inside one (TH-D7A, 2026-10-28).
+FREQ_BANDS = ((118_000_000, 136_000_000), (136_000_000, 174_000_000),
+              (174_000_000, 524_000_000))
+
+
+def freq_band(freq: int):
+    """The FREQ_BANDS entry holding freq, or None."""
+    return next((r for r in FREQ_BANDS if r[0] <= freq < r[1]), None)
+
+
 # Program-scan edge memories, in the radio's own order.
 PSCAN_IDS = tuple(f"{edge}{n}" for n in range(10) for edge in "LU")
 CALL_IDS = ("CALL0", "CALL1")        # CR/CW index 0 = VHF call, 1 = UHF call
@@ -320,6 +331,14 @@ class Channel:
         if len(self.name) > NAME_LEN or not re.fullmatch(f"{NAME_CHAR_CLASS}*", self.name):
             raise ValueError(f"name must be at most {NAME_LEN} characters of plain ASCII, "
                              "no commas")
+        # the TH-D7A refuses a cross-band split side (146.52 / 446.00) with N (2026-10-28)
+        if self.duplex == "split" and freq_band(self.tx_freq) != freq_band(self.freq):
+            raise ValueError("an odd split must transmit in the receive frequency's band")
+
+    def split_side(self) -> "Channel":
+        """The odd-split transmit side as MW 0,1 / MR 0,1 carry it: the full spec
+        with the transmit frequency first."""
+        return self.replace(freq=self.tx_freq, shift=0, reverse=False, offset=0)
 
 
 # ---------------------------------------------------------------------------
