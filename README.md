@@ -33,7 +33,16 @@ it off: in PACKET mode the port belongs to the TNC.
   (Operation, Radio, DTMF, TNC, APRS, SSTV, Sky Command, programmable VFO).
   Changed settings show in bold until you write them. **Backup radio…**
   and **Restore…** save or load all memories and settings as JSON.
+- **Scan**: sweeps a band's VFO from one frequency to another and plots the
+  S-meter (0-5) at each step; faint bars hold the peaks over repeated sweeps.
+  Click the graph to tune the band there (it stops a running sweep). After a
+  sweep the band goes back to its mode and frequency. Each point is a BUF
+  write, a dwell for the receiver to settle, and an SM read, so expect a few
+  points a second at 9600 baud.
 - **Console**: every line sent and received, and a box for raw commands.
+
+Every panel is a dock: drag it by its title to place panels side by side,
+or float it as its own window. View > Reset layout puts them back.
 
 ## Command line
 ```sh

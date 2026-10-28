@@ -318,6 +318,42 @@ class D7Radio:
             changes["step"] = P.step_index(step_khz)
         return self.update_vfo(band, **changes)
 
+    # -- band sweep: write a frequency, let the receiver settle, read the S-meter
+    def sweep_begin(self, band) -> dict:
+        """Put the band in VFO mode for a sweep; returns what sweep_end restores."""
+        b = P.band_index(band)
+        saved = {"band": b, "mode": self.get_band_mode(b)}
+        if saved["mode"] != 0:
+            self.set_band_mode(b, 0)
+        saved["vfo"] = self.get_vfo(b)
+        return saved
+
+    def sweep_point(self, saved: dict, hz: int, step_khz: float, settle_s: float) -> Optional[int]:
+        """S-meter (0-5) at hz, or None when the radio refuses the frequency."""
+        # reverse off: reverse would put the receiver on the TX frequency
+        ch = saved["vfo"].replace(freq=int(hz), step=P.step_index(step_khz), reverse=False)
+        try:
+            self.set_vfo(saved["band"], ch)
+        except (CommandRejected, ValueError):
+            return None
+        time.sleep(settle_s)
+        return self.get_smeter(saved["band"])
+
+    def sweep_end(self, saved: dict, tune_hz: Optional[int] = None,
+                  step_khz: Optional[float] = None) -> None:
+        """Put the band back as it was, or leave it in VFO on tune_hz
+        (with the sweep's step, so that tune_hz is on the tuning grid)."""
+        b = saved["band"]
+        if tune_hz is not None:
+            ch = saved["vfo"].replace(freq=int(tune_hz))
+            if step_khz is not None:
+                ch = ch.replace(step=P.step_index(step_khz))
+            self.set_vfo(b, ch)
+            return
+        self.set_vfo(b, saved["vfo"])
+        if saved["mode"] != 0:
+            self.set_band_mode(b, saved["mode"])
+
     def get_band_mode(self, band) -> int:
         """0 VFO, 2 MR, 3 CALL (VMC)."""
         return int(self.values("VMC", P.band_index(band))[1])

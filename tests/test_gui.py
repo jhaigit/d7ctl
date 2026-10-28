@@ -72,7 +72,7 @@ def test_gui_panels_are_docks(app, tmp_path):
     win.show()
     app.processEvents()
     d = win.docks
-    assert set(d) == {"Radio", "Memories", "Settings", "Console"}
+    assert set(d) == {"Radio", "Memories", "Settings", "Scan", "Console"}
     # by default the console is beside the panels, not a tab among them
     assert win.dockWidgetArea(d["Console"]) != win.dockWidgetArea(d["Radio"])
     assert d["Memories"] in win.tabifiedDockWidgets(d["Radio"])
@@ -84,3 +84,37 @@ def test_gui_panels_are_docks(app, tmp_path):
     win2.default_layout()
     assert not win2.docks["Console"].isFloating()
     win2.close()
+
+
+def test_gui_band_scan_and_click_to_tune(app):
+    win = MainWindow("emulator")
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    sc = win.scan_tab
+    sc.band.setCurrentIndex(0)
+    sc.start_mhz.setText("146.40")
+    sc.stop_mhz.setText("146.60")
+    sc.step.setCurrentText("20")
+    sc.dwell.setValue(0)
+    win.radio.recall_memory(0, "001")                 # band A in MR: the sweep must put it back
+    sc.start()
+    assert pump(app, win, lambda: not sc.running, 15)
+    v = sc.view
+    assert v.peaks[v.freqs.index(146_520_000)] == 5  # the emulator's carrier
+    assert win.radio.get_band_mode(0) == 2           # restored after the sweep
+    # click the peak: band A goes to VFO on that frequency
+    x = v._plot_rect()[0] + (v.freqs.index(146_520_000) + 0.5) * v._plot_rect()[2] / len(v.freqs)
+    assert v.freqs[v.index_at(x)] == 146_520_000
+    v.clicked.emit(146_520_000)
+    assert pump(app, win, lambda: not win.worker.pending and win.radio.get_vfo(0).freq == 146_520_000)
+    assert win.radio.get_band_mode(0) == 0
+    # a click during a running sweep stops it and leaves the band there
+    sc.repeat.setChecked(True)
+    sc.start()
+    assert pump(app, win, lambda: sc.index > 3)
+    v.clicked.emit(146_440_000)
+    assert pump(app, win, lambda: not sc.running and not win.worker.pending, 10)
+    assert win.radio.get_vfo(0).freq == 146_440_000
+    win.close()
+

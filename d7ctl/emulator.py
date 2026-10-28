@@ -39,6 +39,10 @@ class Emulator:
         self.squelch = [2, 2]
         self.power = [0, 0]
         self.smeter = [0, 0]
+        # fixed signals for band sweeps: (Hz, S level, half-width Hz)
+        self.carriers = [(144_390_000, 3, 10_000), (145_800_000, 2, 5_000),
+                         (146_520_000, 5, 15_000), (146_940_000, 4, 10_000),
+                         (446_000_000, 3, 10_000)]
         self.busy = [False, False]
         self.memories: dict = {}          # memid -> Channel (with name, tx_freq)
         self.calls = [Channel(freq=146_520_000, step=3), Channel(freq=446_000_000, step=3)]
@@ -242,9 +246,13 @@ class Emulator:
             self.power[b] = int(args[1])
         return f"PC {b},{self.power[b]}"
 
+    def _carrier(self, b: int) -> int:
+        f = self.vfo[b].freq
+        return max((s for hz, s, w in self.carriers if abs(f - hz) <= w), default=0)
+
     def _cmd_SM(self, args):
         b = self._band(args)
-        return f"SM {b},{self.smeter[b]}"
+        return f"SM {b},{max(self.smeter[b], self._carrier(b))}"
 
     def _cmd_BY(self, args):
         b = self._band(args)

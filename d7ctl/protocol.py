@@ -142,6 +142,16 @@ def format_mhz(hz: Optional[int], places: int = 5) -> str:
     return f"{hz / 1e6:.{places}f}"
 
 
+def sweep_frequencies(start_hz: int, stop_hz: int, step_khz: float) -> list:
+    """Frequencies for a band sweep: on the step grid, start to stop inclusive."""
+    step = round(step_khz * 1000)
+    if step <= 0:
+        raise ValueError("step must be positive")
+    lo, hi = sorted((int(start_hz), int(stop_hz)))
+    first = -(-lo // step) * step                  # first grid point at or above start
+    return list(range(first, hi + 1, step))
+
+
 def parse_frequency(text, default_unit: str = "MHz") -> int:
     """'145.525', '145.525M', '145525k', '145525000' -> Hz.
 

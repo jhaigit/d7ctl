@@ -17,7 +17,7 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase
+from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
     QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
@@ -460,6 +460,286 @@ class RadioTab(QWidget):
         gl.addWidget(refresh)
         lay.addWidget(g)
         lay.addStretch(1)
+
+
+# ---------------------------------------------------------------------------
+# band scan
+# ---------------------------------------------------------------------------
+
+S_MAX = 5                    # the D7's S-meter reads 0-5
+SWEEP_MAX_POINTS = 4000      # a 5 kHz sweep of 20 MHz; beyond this a sweep takes too long
+SWEEP_DWELL_MS = 100         # default receiver settling time per point (not yet measured)
+
+
+class SpectrumView(QWidget):
+    """S-meter against frequency as bars; click a bar to tune there."""
+    clicked = Signal(int)                 # Hz
+    hovered = Signal(int, object)         # Hz, level or None
+
+    MARGIN_L, MARGIN_B, MARGIN_T = 26, 18, 6
+
+    def __init__(self):
+        super().__init__()
+        self.freqs: list = []
+        self.levels: list = []            # this sweep, None = not read or refused
+        self.peaks: list = []             # highest level seen at each point
+        self.cursor = -1                  # point being measured
+        self.marker: int | None = None   # Hz the band was tuned to by a click
+        self.setMouseTracking(True)
+        self.setMinimumHeight(160)
+        self.setCursor(Qt.CrossCursor)
+
+    def set_frequencies(self, freqs):
+        if freqs != self.freqs:
+            self.freqs = list(freqs)
+            self.peaks = [None] * len(freqs)
+        self.levels = [None] * len(freqs)
+        self.cursor = -1
+        self.update()
+
+    def clear_peaks(self):
+        self.peaks = [None] * len(self.freqs)
+        self.update()
+
+    def set_level(self, i, level):
+        self.levels[i] = level
+        if level is not None and (self.peaks[i] is None or level > self.peaks[i]):
+            self.peaks[i] = level
+        self.cursor = i
+        self.update()
+
+    def _plot_rect(self):
+        return (self.MARGIN_L, self.MARGIN_T, max(1, self.width() - self.MARGIN_L - 4),
+                max(1, self.height() - self.MARGIN_T - self.MARGIN_B))
+
+    def index_at(self, x) -> int:
+        left, _, w, _ = self._plot_rect()
+        if not self.freqs:
+            return -1
+        i = int((x - left) * len(self.freqs) / w)
+        return min(max(i, 0), len(self.freqs) - 1)
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        pal = self.palette()
+        p.fillRect(self.rect(), pal.color(QPalette.Base))
+        left, top, w, h = self._plot_rect()
+        text = pal.color(QPalette.Text)
+        grid = pal.color(QPalette.Mid)
+        p.setFont(mono_font(8))
+        for s in range(S_MAX + 1):                       # S grid and labels
+            y = top + h - h * s / S_MAX
+            p.setPen(QPen(grid, 1, Qt.DotLine))
+            p.drawLine(left, int(y), left + w, int(y))
+            p.setPen(text)
+            p.drawText(2, int(y) + 4, f"S{s}")
+        n = len(self.freqs)
+        if n:
+            bw = w / n
+            bar = pal.color(QPalette.Highlight)
+            peak = QColor(bar)
+            peak.setAlpha(90)
+            for i in range(n):
+                x = left + i * bw
+                for level, colour in ((self.peaks[i], peak), (self.levels[i], bar)):
+                    if level:
+                        bh = h * level / S_MAX
+                        p.fillRect(int(x), int(top + h - bh), max(1, int(bw) - (1 if bw > 3 else 0)),
+                                   int(bh) + 1, colour)
+            if 0 <= self.cursor < n:
+                p.setPen(QPen(QColor("#d04040"), 1))
+                cx = int(left + (self.cursor + 0.5) * bw)
+                p.drawLine(cx, top, cx, top + h)
+            if self.marker is not None and self.freqs[0] <= self.marker <= self.freqs[-1]:
+                span = (self.freqs[-1] - self.freqs[0]) or 1
+                mx = int(left + (self.marker - self.freqs[0]) / span * (w - bw) + bw / 2)
+                p.setPen(QPen(QColor("#30a030"), 2))
+                p.drawLine(mx, top, mx, top + h)
+            p.setPen(text)                               # frequency labels: ends and middle
+            for i, align in ((0, Qt.AlignLeft), (n // 2, Qt.AlignHCenter), (n - 1, Qt.AlignRight)):
+                x = left + (i + 0.5) * bw
+                label = P.format_mhz(self.freqs[i], 4)
+                fw = p.fontMetrics().horizontalAdvance(label)
+                lx = {Qt.AlignLeft: left, Qt.AlignRight: left + w - fw}.get(align, x - fw / 2)
+                p.drawText(int(lx), top + h + 14, label)
+        p.setPen(grid)
+        p.drawRect(left, top, w, h)
+        p.end()
+
+    def mouseMoveEvent(self, ev):
+        i = self.index_at(ev.position().x())
+        if i >= 0:
+            self.hovered.emit(self.freqs[i], self.peaks[i])
+
+    def mousePressEvent(self, ev):
+        i = self.index_at(ev.position().x())
+        if ev.button() == Qt.LeftButton and i >= 0:
+            self.clicked.emit(self.freqs[i])
+
+
+class ScanTab(QWidget):
+    """Band sweep: step the VFO, read the S-meter, plot; click the plot to tune."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__()
+        self.main = main
+        self.saved = None                 # radio state from sweep_begin while sweeping
+        self.running = False
+        self.stop_requested = False
+        self.tune_to: int | None = None
+        self.index = 0
+        self.t_sweep = 0.0
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Band"))
+        self.band = QComboBox()
+        self.band.addItems(P.BANDS)
+        row.addWidget(self.band)
+        row.addWidget(QLabel("From"))
+        self.start_mhz = QLineEdit("144.000")
+        self.start_mhz.setMaximumWidth(90)
+        row.addWidget(self.start_mhz)
+        row.addWidget(QLabel("to"))
+        self.stop_mhz = QLineEdit("148.000")
+        self.stop_mhz.setMaximumWidth(90)
+        row.addWidget(self.stop_mhz)
+        row.addWidget(QLabel("MHz  step"))
+        self.step = QComboBox()
+        self.step.addItems([f"{s:g}" for s in P.STEPS_KHZ])
+        self.step.setCurrentText("25")
+        row.addWidget(self.step)
+        row.addWidget(QLabel("kHz  dwell"))
+        self.dwell = QSpinBox()
+        self.dwell.setRange(0, 2000)
+        self.dwell.setSingleStep(25)
+        self.dwell.setSuffix(" ms")
+        self.dwell.setValue(SWEEP_DWELL_MS)
+        self.dwell.setToolTip("Time for the receiver to settle at each frequency before the S-meter is read")
+        row.addWidget(self.dwell)
+        self.repeat = QCheckBox("Repeat")
+        self.repeat.setToolTip("Sweep again and again until Stop; the faint bars hold the peaks")
+        row.addWidget(self.repeat)
+        self.go = QPushButton("Start")
+        self.go.clicked.connect(self.toggle)
+        row.addWidget(self.go)
+        clear = QPushButton("Clear peaks")
+        clear.clicked.connect(lambda: self.view.clear_peaks())
+        row.addWidget(clear)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.view = SpectrumView()
+        self.view.clicked.connect(self.tune)
+        self.view.hovered.connect(lambda hz, s: self.info.setText(
+            f"{P.format_mhz(hz)} MHz  " + (f"S{s}" if s is not None else "-") + "   (click to tune)"))
+        lay.addWidget(self.view, 1)
+        self.info = QLabel("Sweeps the band's VFO and plots the S-meter. Click the graph to tune there.")
+        lay.addWidget(self.info)
+
+    # -- sweep ---------------------------------------------------------------
+    def toggle(self):
+        if self.running:
+            self.stop_requested = True
+            self.go.setEnabled(False)          # until the band is put back
+        else:
+            self.start()
+
+    def start(self):
+        try:
+            freqs = P.sweep_frequencies(P.parse_frequency(self.start_mhz.text()),
+                                        P.parse_frequency(self.stop_mhz.text()), self.step_khz)
+        except ValueError as exc:
+            self.main.error(exc)
+            return
+        if not freqs:
+            self.main.error("no frequencies in that range")
+            return
+        if len(freqs) > SWEEP_MAX_POINTS:
+            self.main.error(f"{len(freqs)} points: narrow the range or use a larger step "
+                            f"(at most {SWEEP_MAX_POINTS})")
+            return
+        self.view.set_frequencies(freqs)
+        self.running, self.stop_requested, self.tune_to, self.index = True, False, None, 0
+        self.go.setText("Stop")
+        self.band.setEnabled(False)
+        band = self.band.currentIndex()
+        self.main.run(lambda r: r.sweep_begin(band), self._begun, self._failed)
+
+    @property
+    def step_khz(self) -> float:
+        return float(self.step.currentText())
+
+    def _begun(self, saved):
+        self.saved = saved
+        self.t_sweep = time.monotonic()
+        self._next()
+
+    def _next(self):
+        if self.stop_requested or self.main.radio is None:
+            self._finish()
+            return
+        if self.index >= len(self.view.freqs):
+            took = time.monotonic() - self.t_sweep
+            self.info.setText(f"sweep of {len(self.view.freqs)} points took {took:.1f} s")
+            if not self.repeat.isChecked():
+                self._finish()
+                return
+            self.view.set_frequencies(self.view.freqs)   # keeps the peaks
+            self.index, self.t_sweep = 0, time.monotonic()
+        i, hz, saved = self.index, self.view.freqs[self.index], self.saved
+        step, settle = self.step_khz, self.dwell.value() / 1000
+
+        def done(level):
+            self.view.set_level(i, level)
+            self.index += 1
+            self._next()
+        self.main.run(lambda r: r.sweep_point(saved, hz, step, settle), done, self._failed)
+
+    def _finish(self):
+        saved, tune, step = self.saved, self.tune_to, self.step_khz
+        if saved is None or self.main.radio is None:
+            self._idle()
+            return
+
+        def done(_):
+            self._idle()
+            self.main.refresh_band(saved["band"])
+            if tune is not None:
+                self.info.setText(f"tuned band {P.BANDS[saved['band']]} to {P.format_mhz(tune)} MHz")
+        self.main.run(lambda r: r.sweep_end(saved, tune, step), done, self._failed)
+
+    def _failed(self, exc):
+        self._idle()
+        self.main.error(exc)
+
+    def _idle(self):
+        self.running = False
+        self.saved = None
+        self.view.cursor = -1
+        self.view.update()
+        self.go.setText("Start")
+        self.go.setEnabled(True)
+        self.band.setEnabled(True)
+
+    # -- click to tune -------------------------------------------------------
+    def tune(self, hz: int):
+        self.view.marker = hz
+        self.view.update()
+        if self.running:                       # stop, and leave the band on hz
+            self.tune_to = hz
+            self.stop_requested = True
+            self.go.setEnabled(False)
+            return
+        band, step = self.band.currentIndex(), self.step_khz
+
+        def job(r):
+            if r.get_band_mode(band) != 0:
+                r.set_band_mode(band, 0)
+            r.update_vfo(band, freq=hz, step=P.step_index(step))
+
+        def done(_):
+            self.main.refresh_band(band)
+            self.info.setText(f"tuned band {P.BANDS[band]} to {P.format_mhz(hz)} MHz")
+        self.main.run(job, done)
 
 
 # ---------------------------------------------------------------------------
@@ -1123,11 +1403,13 @@ class MainWindow(QMainWindow):
         self.memories = MemoriesTab(self)
         self.settings_tab = SettingsTab(self)
         self.console = ConsoleTab(self)
+        self.scan_tab = ScanTab(self)
         self.bridge.traffic.connect(self.console.add)
         self.docks = {}
         view = self.menuBar().addMenu("&View")
         for name, panel in (("Radio", self.radio_tab), ("Memories", self.memories),
-                            ("Settings", self.settings_tab), ("Console", self.console)):
+                            ("Settings", self.settings_tab), ("Scan", self.scan_tab),
+                            ("Console", self.console)):
             dock = QDockWidget(name, self)
             dock.setObjectName(f"dock_{name}")          # saveState keys on it
             dock.setWidget(panel)
@@ -1161,7 +1443,7 @@ class MainWindow(QMainWindow):
     CONSOLE_HEIGHT = 180          # px: about ten lines of traffic under the panels
 
     def default_layout(self):
-        """Radio, Memories and Settings in tabs at the top; the Console below them."""
+        """Radio, Memories, Settings and Scan in tabs at the top; the Console below them."""
         d = self.docks
         for dock in d.values():
             dock.setFloating(False)
@@ -1170,6 +1452,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, d["Console"])
         self.tabifyDockWidget(d["Radio"], d["Memories"])
         self.tabifyDockWidget(d["Radio"], d["Settings"])
+        self.tabifyDockWidget(d["Radio"], d["Scan"])
         d["Radio"].raise_()
         self.resizeDocks([d["Console"]], [self.CONSOLE_HEIGHT], Qt.Vertical)
 
@@ -1216,7 +1499,7 @@ class MainWindow(QMainWindow):
             self.port.setCurrentText(os.environ.get("D7_PORT", "/dev/ttyUSB0"))
 
     def set_connected(self, on: bool):
-        for w in (self.radio_tab, self.memories, self.settings_tab):
+        for w in (self.radio_tab, self.memories, self.settings_tab, self.scan_tab):
             w.setEnabled(on)
         self.console.entry.setEnabled(on)
         self.port.setEnabled(not on)
@@ -1329,7 +1612,8 @@ class MainWindow(QMainWindow):
         self.run(job, lambda raw: (self.settings_tab.show_values({key: raw}), then and then()))
 
     def _poll(self):
-        if self.radio is None or not self.poll.isChecked() or self.worker.pending or self.transmitting:
+        if (self.radio is None or not self.poll.isChecked() or self.worker.pending
+                or self.transmitting or self.scan_tab.running):
             return
 
         def job(r):

@@ -207,3 +207,23 @@ def test_menu_values_read_off_a_th_d7a():
     r.open()
     assert r.command("TH", check=False) == "N"
     r.close()
+
+
+def test_sweep(radio):
+    radio.recall_memory(0, "001")                      # band A in MR mode
+    before = radio.get_vfo(0)
+    saved = radio.sweep_begin(0)
+    assert radio.get_band_mode(0) == 0
+    freqs = P.sweep_frequencies(146_400_000, 146_600_000, 20)
+    levels = {hz: radio.sweep_point(saved, hz, 20, 0) for hz in freqs}
+    assert max(levels, key=levels.get) == 146_520_000 and levels[146_520_000] == 5
+    radio.sweep_end(saved)
+    assert radio.get_band_mode(0) == 2 and radio.get_vfo(0).freq == before.freq
+    saved = radio.sweep_begin(0)
+    radio.sweep_end(saved, tune_hz=146_520_000)          # a click on the graph
+    assert radio.get_band_mode(0) == 0 and radio.get_vfo(0).freq == 146_520_000
+
+
+def test_sweep_frequencies():
+    assert P.sweep_frequencies(146_401_000, 146_460_000, 20) == [146_420_000, 146_440_000, 146_460_000]
+    assert P.sweep_frequencies(145_000_000, 145_012_500, 6.25)[-1] == 145_012_500

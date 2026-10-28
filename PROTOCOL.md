@@ -113,3 +113,6 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
    `TH` (1750 Hz hold) is untested on a TH-D7E.
 9. **`TC 1`** (from the Kenwood command lists) should hand the port from the
    TNC back to the radio; the emulator assumes it does and answers `TC 1`.
+10. **Band sweep timing** (GUI Scan): how long after a BUF write the S-meter
+    reading is valid (default dwell 100 ms, a guess), and whether `SM` reads
+    a signal that is below the squelch setting or reports 0 until it opens.
