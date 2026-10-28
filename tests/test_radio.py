@@ -316,3 +316,33 @@ def test_apo_without_its_second_field():
     emu = Emulator()
     assert emu.handle("APO 1") == "APO 1,0" and emu.handle("APO") == "APO 1,0"
     assert emu.handle("APO 0") == "APO 0"
+
+
+def test_switch_to_mr_is_reported_like_the_radio():
+    # TH-D7A, 2026-10-28: VMC 0,2 from the PC is followed by VMC, MC, MCL, MNA, BUF
+    from d7ctl.emulator import Emulator
+    emu = Emulator()
+    seen = []
+    emu.async_sink = seen.append
+    emu.handle("AI 1")
+    emu.handle("VMC 0,0")
+    assert seen == []
+    assert emu.handle("VMC 0,2") == "VMC 0,2"
+    assert [line.split()[0] for line in seen] == ["VMC", "MC", "MCL", "MNA", "BUF"]
+
+
+def test_sweeping_onto_a_signal_is_reported_like_the_radio():
+    # TH-D7A, 2026-10-28: BY 0,1 and SM 0,04 arrive with the BUF write onto a signal
+    from d7ctl.emulator import Emulator
+    emu = Emulator()
+    seen = []
+    emu.async_sink = seen.append
+    emu.handle("AI 1")
+    emu.handle("SQ 0,01")
+    hz, level, _w = emu.carriers[0]
+    ch = emu.vfo[0].replace(freq=hz)
+    emu.handle(f"BUF 0,{ch.spec(with_lockout=False)}")
+    assert seen[-2:] == ["BY 0,1", f"SM 0,{level:02d}"]
+    assert emu.handle("SM 0") == f"SM 0,{level:02d}"
+    emu.handle(f"BUF 0,{ch.replace(freq=hz + 1_000_000).spec(with_lockout=False)}")
+    assert seen[-2:] == ["BY 0,0", "SM 0,00"]

@@ -115,6 +115,20 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   (band A went from 024 to 036 over 030-035). From an airband memory band A
   steps only through airband memories: `MC 0,030`, then `UP` gave 031, 032,
   035, 040. The memories therefore stay within one frequency band.
+- Switching a band to MR from the PC is reported too (2026-10-28): after the
+  `VMC 0,2` reply the radio sends `VMC 0,2`, `MC 0,040`, `MCL 0,0`,
+  `MNA 0,040,CYHC TWR`, `BUF 0,...`, so the reply to the next command can
+  arrive behind them (the reader matches replies by mnemonic). `VMC 0,0`
+  and BUF writes are not reported.
+- A band sweep (GUI Scan) of 118.000-120.000 MHz in 5 kHz steps, AM, with
+  the default 100 ms dwell: 401 points in about 2 min (0.3 s per point:
+  BUF write, dwell, SM). Every BUF write was echoed unchanged.
+- S-meter and busy (2026-10-28, band sweep, squelch 1): `SM` answers two
+  digits, `SM 0,00` .. `SM 0,04`. Noise alone reads 0, also with the squelch
+  open. Sweeping onto a signal at 118.400 MHz, the radio (AI on) sent
+  `BY 0,1` and `SM 0,04` unprompted before the BUF echo, and the query
+  100 ms later answered `SM 0,04`; stepping off sent `BY 0,0`, `SM 0,00`.
+  So the meter settles within the 100 ms dwell.
 - A byte above 127 in a name is stored as a space (2026-10-28):
   `MNA 0,199,Café` answers and reads back `Caf ` with no error, and
   `MNA 0,199,µ` gives a single space. The emulator does the same for every
@@ -154,9 +168,10 @@ match) and remove it here. Numbers are not stable; refer to the titles.
 **Not yet tried on the radio**
 - **Transmit**: `d7ctl tx --seconds N` and the GUI PTT (TX, then RX in all
   cases). The reply to `TX` is unknown; `RX` answers `RX`. Use a dummy load.
-- **Band sweep** (GUI Scan): how long after a BUF write the S-meter reading
-  is valid (default dwell 100 ms, a guess), and whether `SM` reads a signal
-  below the squelch setting or reports 0 until the squelch opens.
+- **Band sweep below the squelch**: does `SM` read a signal too weak to
+  open the squelch, or report 0 until it opens? (Noise alone reads 0; the
+  signal seen so far opened the squelch, see above.) And can the dwell be
+  shorter than 100 ms? The report arrived before the 100 ms query.
 - **`TC 1`** (from the Kenwood command lists) should hand the port from the
   TNC in PACKET mode back to the radio; the emulator assumes it does.
 - **BUF-write fallback**: `D7Radio.set_vfo` falls back to FQ/SFT/OS/... if BUF

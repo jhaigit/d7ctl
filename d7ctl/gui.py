@@ -891,6 +891,7 @@ class ScanTab(QWidget):
     def _begun(self, saved):
         self.saved = saved
         self.t_sweep = time.monotonic()
+        self.main.refresh_band(saved["band"])    # now in VFO mode
         self._next()
 
     def _next(self):
@@ -910,6 +911,9 @@ class ScanTab(QWidget):
 
         def done(level):
             self.view.set_level(i, level)
+            if level is not None:              # the radio does not report PC changes: follow it
+                self.main.radio_tab.panels[saved["band"]].show_channel(
+                    D7Radio.sweep_channel(saved, hz, step))
             self.index += 1
             self._next()
         self.main.run(lambda r: r.sweep_point(saved, hz, step, settle), done, self._failed)

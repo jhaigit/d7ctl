@@ -329,12 +329,16 @@ class D7Radio:
         saved["vfo"] = self.get_vfo(b)
         return saved
 
+    @staticmethod
+    def sweep_channel(saved: dict, hz: int, step_khz: float) -> Channel:
+        """The VFO setting sweep_point puts on the band for hz."""
+        # reverse off: reverse would put the receiver on the TX frequency
+        return saved["vfo"].replace(freq=int(hz), step=P.step_index(step_khz), reverse=False)
+
     def sweep_point(self, saved: dict, hz: int, step_khz: float, settle_s: float) -> Optional[int]:
         """S-meter (0-5) at hz, or None when the radio refuses the frequency."""
-        # reverse off: reverse would put the receiver on the TX frequency
-        ch = saved["vfo"].replace(freq=int(hz), step=P.step_index(step_khz), reverse=False)
         try:
-            self.set_vfo(saved["band"], ch)
+            self.set_vfo(saved["band"], self.sweep_channel(saved, hz, step_khz))
         except (CommandRejected, ValueError):
             return None
         time.sleep(settle_s)

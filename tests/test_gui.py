@@ -99,6 +99,8 @@ def test_gui_band_scan_and_click_to_tune(app):
     sc.dwell.setValue(0)
     win.radio.recall_memory(0, "001")                 # band A in MR: the sweep must put it back
     sc.start()
+    a = win.radio_tab.panels[0]
+    assert pump(app, win, lambda: a.display.text() == "146.46000")   # follows the sweep
     assert pump(app, win, lambda: not sc.running, 15)
     v = sc.view
     assert v.peaks[v.freqs.index(146_520_000)] == 5  # the emulator's carrier

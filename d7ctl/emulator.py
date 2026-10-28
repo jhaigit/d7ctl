@@ -44,6 +44,7 @@ class Emulator:
                          (146_520_000, 5, 15_000), (146_940_000, 4, 10_000),
                          (446_000_000, 3, 10_000)]
         self.busy = [False, False]
+        self.reported_sm = [0, 0]         # last SM level sent unsolicited
         self.memories: dict = {}          # memid -> Channel (with name, tx_freq)
         self.calls = [Channel(freq=146_520_000, step=3), Channel(freq=446_000_000, step=3)]
         self.settings: dict = {}
@@ -99,14 +100,23 @@ class Emulator:
                 if self.tx:
                     continue
                 b = self._rng.randrange(2)
-                level = self._rng.choice([0, 0, 0, 1, 2, 3, 4, 5])
-                if level != self.smeter[b]:
-                    self.smeter[b] = level
-                    self._emit(f"SM {b},{level}")
-                busy = level > self.squelch[b] - 1 and level > 0
-                if busy != self.busy[b]:
-                    self.busy[b] = busy
-                    self._emit(f"BY {b},{int(busy)}")
+                self.smeter[b] = self._rng.choice([0, 0, 0, 1, 2, 3, 4, 5])
+                self._report_signal(b)
+
+    def _level(self, b: int) -> int:
+        return max(self.smeter[b], self._carrier(b))
+
+    def _report_signal(self, b: int):
+        """With AI on the TH-D7A reports a change of busy and S-meter, BY before SM;
+        after a BUF write onto a signal they come before the BUF echo (2026-10-28)."""
+        level = self._level(b)
+        busy = level > 0 and level >= self.squelch[b]
+        if busy != self.busy[b]:
+            self.busy[b] = busy
+            self._emit(f"BY {b},{int(busy)}")
+        if level != self.reported_sm[b]:
+            self.reported_sm[b] = level
+            self._emit(f"SM {b},{level:02d}")
 
     # ------------------------------------------------------------------
     def handle(self, line: str) -> str:
@@ -182,6 +192,7 @@ class Emulator:
             ch.validate()
             self.vfo[b] = ch
             self.band_mode[b] = 0
+            self._report_signal(b)
         return self._buf_line(b)
 
     def _cmd_FQ(self, args):
@@ -218,6 +229,11 @@ class Emulator:
             self.band_mode[b] = m
             if m == 2:
                 self._load_memory(b)
+                # VMC b,2 from the PC is reported like a memory step, after the reply
+                # (TH-D7A, 2026-10-28); VMC b,0 is not reported
+                self._emit(f"VMC {b},2")
+                self._report_memory(b)
+                self._emit(self._buf_line(b))
             elif m == 3:
                 self.vfo[b] = self.calls[0 if self.vfo[b].freq < 300_000_000 else 1].replace()
         return f"VMC {b},{self.band_mode[b]}"
@@ -226,6 +242,14 @@ class Emulator:
         ch = self.memories.get(self.mc[b])
         if ch is not None:
             self.vfo[b] = ch.replace(name="", lockout=False)
+
+    def _report_memory(self, b):
+        """The TH-D7A reports a memory step as MC, MCL, MNA (then BUF) (2026-10-28)."""
+        ch = self.memories.get(self.mc[b])
+        if ch is not None:
+            self._emit(f"MC {b},{self.mc[b]}")
+            self._emit(f"MCL {b},{int(ch.lockout)}")
+            self._emit(f"MNA 0,{self.mc[b]},{ch.name}")
 
     def _cmd_MC(self, args):
         b = self._band(args)
@@ -260,7 +284,7 @@ class Emulator:
 
     def _cmd_SM(self, args):
         b = self._band(args)
-        return f"SM {b},{max(self.smeter[b], self._carrier(b))}"
+        return f"SM {b},{self._level(b):02d}"    # two digits: "SM 0,04" (TH-D7A)
 
     def _cmd_BY(self, args):
         b = self._band(args)
@@ -299,11 +323,7 @@ class Emulator:
                 i = ids.index(self.mc[b]) if self.mc[b] in ids else 0
                 self.mc[b] = ids[(i + d) % len(ids)]
                 self._load_memory(b)
-                # the TH-D7A reports a memory step as MC, MCL, MNA, then BUF (2026-10-28)
-                ch = self.memories[self.mc[b]]
-                self._emit(f"MC {b},{self.mc[b]}")
-                self._emit(f"MCL {b},{int(ch.lockout)}")
-                self._emit(f"MNA 0,{self.mc[b]},{ch.name}")
+                self._report_memory(b)
         else:
             ch = self.vfo[b]
             ch.freq += d * int(ch.step_khz * 1000)
