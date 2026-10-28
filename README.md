@@ -93,10 +93,18 @@ The tests cover the protocol codecs, the driver against the emulator
 (in-process and through pyserial on a pty), the CLI, and the GUI offscreen.
 
 ## Status
-Every feature is built and tested against the emulator. **None of it has
-been run against a real TH-D7 yet.** The protocol comes from published
-command lists and from the Hamlib and CHIRP drivers; `PROTOCOL.md` lists
-them and names the details to check first on hardware.
+Every feature is tested against the emulator, which follows what the real
+radio does. Since 2026-10-27 d7ctl has also been run on a real **TH-D7A**
+(it identifies as `ID TH-D7`) through a PG-4W-type cable. On that radio
+these work: connecting, reading and writing the VFO and memories (names, erase,
+odd splits), the settings backup, UP/DW, band sweeps with the S-meter, and
+the radio's own reports (AI). `PROTOCOL.md` records what was seen, under
+**Seen on hardware**.
+
+Not yet tried on a radio: transmitting (PTT), memory scans and scan lists,
+holding on a signal, recalling a memory by clicking the scan graph, and the
+TH-D7E / TH-D7G with their own settings. The questions still open are
+listed in `PROTOCOL.md` under **Unverified - open questions**.
 
 ## Licence
 MIT; see [LICENSE](LICENSE).
