@@ -148,8 +148,14 @@ def test_settings_with_trailing_fields(radio):
     # the TH-D7 answers "APO 1,0" and "BEL 0,0," (2026-10-27)
     s = next(s for s in radio.settings() if s.key == "APO")
     assert s.decode("1,0") == "30 min"
+    sent = []
+    radio.add_traffic_listener(lambda d, line: d == ">" and sent.append(line))
+    radio.write_setting(s, "Off")
+    assert radio.command("APO") == "APO 0"             # off: no second field, as on the radio
+    radio.read_setting_raw(s)
     radio.write_setting(s, "60 min")
-    assert radio.command("APO") == "APO 2,0"           # the trailing field is sent back
+    assert radio.command("APO") == "APO 2,0"           # on: the second field comes back
+    assert [l for l in sent if l.startswith("APO ")] == ["APO 0", "APO 2,0"]
     s = next(s for s in radio.settings() if s.key == "BEL 0")
     assert radio.read_setting_raw(s) == "0,"
     radio.write_setting(s, True)
@@ -188,3 +194,16 @@ def test_tnc_in_packet_mode(monkeypatch):
     with pytest.raises(TncPacketMode, match="PACKET"):
         r.open()
     assert r.emulator.handle("TC 1") == "TC 1" and not r.emulator.packet_mode
+
+
+def test_menu_values_read_off_a_th_d7a():
+    # display vs reply on a TH-D7A (2026-10-27)
+    from d7ctl.settings import SETTINGS
+    s = {x.key: x for x in SETTINGS}
+    assert [s["TXI"].decode(str(i)) for i in (0, 3, 4, 7)] == ["0.5 min", "3 min", "5 min", "30 min"]
+    assert [s["SV"].decode(str(i)) for i in (0, 1, 5, 9)] == ["Off", "0.2 s", "1.0 s", "5 s"]
+    assert [s["APO"].decode(r) for r in ("0", "1,0", "2,0")] == ["Off", "30 min", "60 min"]
+    r = D7Radio("emulator:D7")
+    r.open()
+    assert r.command("TH", check=False) == "N"
+    r.close()

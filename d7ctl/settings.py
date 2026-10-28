@@ -55,6 +55,7 @@ class Setting:
     models: tuple = ALL            # empty = every model
     restore: bool = True           # safe to write back when restoring a backup
     tail: str = ""                 # extra fields the radio sends after the value (",0" in "APO 1,0")
+    tail_when_off: bool = True     # False: no tail with value 0 ("APO 0" but "APO 1,0")
     note: str = ""
 
     # -- wire ------------------------------------------------------------
@@ -91,6 +92,12 @@ class Setting:
         return not self.models or model is None or model in self.models
 
     # -- conversions -------------------------------------------------------
+    def tail_for(self, value: str, last: str = "") -> str:
+        """Trailing fields to send after `value`: those last read, else the registered ones."""
+        if not self.tail_when_off and value.strip("0") == "":
+            return ""
+        return last or self.tail
+
     def value_field(self, raw: str) -> str:
         """The value of a bool/choice/int, without any trailing fields."""
         return raw.split(",", 1)[0] if self.kind in ("bool", "choice", "int") else raw
@@ -274,16 +281,19 @@ SETTINGS = [
     Setting("CNT", "LCD contrast", "Radio", "int", minimum=1, maximum=16, digits=2),
     _c("SV", "Battery saver", "Radio",
        ("Off", "0.2 s", "0.4 s", "0.6 s", "0.8 s", "1.0 s", "2 s", "3 s", "4 s", "5 s")),
-    # The TH-D7 answers "APO 1,0"; the second field's meaning is unknown (2026-10-27)
-    _c("APO", "Auto power off", "Radio", ("Off", "30 min", "60 min"), tail=",0"),
+    # The TH-D7A answers "APO 0" when off but "APO 1,0", "APO 2,0" at 30/60 min;
+    # the second field's meaning is unknown (2026-10-27)
+    _c("APO", "Auto power off", "Radio", ("Off", "30 min", "60 min"), tail=",0",
+       tail_when_off=False),
     _b("ARO", "Auto repeater offset", "Radio"),
     _c("SCR", "Scan resume", "Radio", ("Time", "Carrier", "Seek")),
     _c("BEP", "Key beep", "Radio", ("Off", "Key", "Key+Data", "All")),
     _b("ELK", "Tuning knob disabled (lock)", "Radio"),
     _b("TXS", "TX inhibit", "Radio"),
     _b("AIP", "Advanced intercept point (VHF)", "Radio"),
-    # The TH-D7A answers "N" (not now) to TH; the condition is unknown (2026-10-27)
-    _b("TH", "TX hold, 1750 Hz", "Radio", note="the TH-D7A refuses it at times"),
+    # 1750 Hz is a European repeater feature: the TH-D7A has no such menu item and
+    # answers "N" (2026-10-27). The A and E both report ID TH-D7, so TH stays listed.
+    _b("TH", "TX hold, 1750 Hz", "Radio", note="1750 Hz models (TH-D7E) only"),
     _c("CKEY", "CALL key function", "Radio", ("Call", "1750 Hz"), models=(D7G,)),
     _b("NSFT", "Beat shift", "Radio",
        note="moves the CPU clock to clear a birdie on the receive frequency"),
@@ -336,8 +346,9 @@ SETTINGS += [
        ("Off", "1/1", "1/2", "1/3", "1/4", "1/5", "1/6", "1/7", "1/8"), models=(D7G,)),
     _t("PP", "Packet path", "APRS", 32),
     _c("DTX", "Beacon transmit method", "APRS", ("Manual", "PTT", "Auto")),
+    # Read off a TH-D7A, TXI 0-7 (2026-10-27): there is no 4 min, as in the manual
     _c("TXI", "Beacon interval", "APRS",
-       ("0.5 min", "1 min", "2 min", "3 min", "4 min", "5 min", "10 min", "20 min", "30 min")),
+       ("0.5 min", "1 min", "2 min", "3 min", "5 min", "10 min", "20 min", "30 min")),
     _t("UPR", "Group code (unproto)", "APRS", 9,
        charset="ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"),
     # BEPT and TEMP: the TH-D7A answers "?" (unknown command) to both (2026-10-27)

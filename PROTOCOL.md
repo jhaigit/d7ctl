@@ -79,7 +79,11 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   the TH-D7. Not answered: `PC 1`, `ASC 1`, `BEL 1` (band B hidden, expected)
   and `TH` (`N`: exists, refused in the state the radio was in), `BEPT` and
   `TEMP` (`?`: not on the TH-D7A, so now TH-D7G only).
-- `SV 5`, `TXI 4`: one digit each.
+- Menu values read off the display against the replies:
+  `APO` `0` Off (no second field), `1,0` 30 min, `2,0` 60 min; `TXI` 0-7 = 0.5, 1, 2, 3, 5, 10,
+  20, 30 min (no 4 min, unlike the first table); `SV` 0 Off, 1 0.2 s,
+  5 1.0 s, 9 5 s; `DL` 0 single band, 1 dual. The TH-D7A has no 1750 Hz
+  menu item, and answers `N` to `TH`.
 - A command arriving on the PC port cancels the radio's menu mode, so
   polling (the GUI's Poll meters) makes the menus unusable.
 - With the TNC in PACKET mode the TNC answers instead: `ID` gives `cmd:ID`
@@ -87,22 +91,23 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   `TncPacketMode` instead of a plain timeout.
 - **PC codes are 0 High, 2 Low, 3 EL** (the TA1DX list; not 0-1-2 as first
   coded): the radio answered `PC 0,2` with L on its display.
+  Code 1 is refused: `PC 0,1` -> `N`; `PC 0,2` -> `PC 0,2`.
 
 ## Unverified - check on a real radio
 1. **BUF write.** The command list says BUF accepts new data. If the radio
    answers `?`, `D7Radio.set_vfo` falls back to `BC b` + FQ/SFT/OS/TO/CT/TN/CTN/REV/MD
    and restores BC - so it works either way, but note which path runs (`-v`).
-2. **PC 1.** Power codes are 0 High, 2 Low, 3 EL (see above); what the
-   radio does with `PC b,1` is unknown - the emulator answers `N`.
-3. **Choice widths.** `SV` answered one digit (`SV 5`), as registered. The
-   driver pads writes to the width the radio used in its last reply, so
-   reading a setting before writing it is always safe.
-4. **DL polarity.** 1 = dual-band display on (as CHIRP uses it). `DL 0`
-   together with `BUF 1` -> `N` supports it; confirm the display showed one band.
-5. **TXI first value**: 0.5 min (CHIRP) vs 0.2 min (TA1DX list).
+2. (Resolved 2026-10-27: `PC b,1` is refused - see above.)
+3. (Resolved 2026-10-27: `SV` is one digit, 0 Off, 1 0.2 s ... 9 5 s.)
+4. (Resolved 2026-10-27: `DL` 0 single band, 1 dual.)
+5. (Resolved 2026-10-27: `TXI` 0-7 = 0.5, 1, 2, 3, 5, 10, 20, 30 min.)
 6. Replies to `MW`, `TX`, `RX`, `TT`, `UP`, `DW` - the driver accepts any
    reply starting with the mnemonic.
 7. `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
-8. **APO second field**, and when `TH` is accepted.
+8. **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
+   always 0 so far; meaning unknown. The driver writes the same forms it
+   reads (`APO 0`, `APO 1,0`); whether the radio also accepts `APO 1`
+   without it is untested.
+   `TH` (1750 Hz hold) is untested on a TH-D7E.
 9. **`TC 1`** (from the Kenwood command lists) should hand the port from the
    TNC back to the radio; the emulator assumes it does and answers `TC 1`.

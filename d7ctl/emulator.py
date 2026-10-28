@@ -362,6 +362,17 @@ class Emulator:
             return "N"
         return self._generic("MNF", args)
 
+    # APO: "APO 0" when off, "APO n,0" when on, as on the TH-D7A
+    def _cmd_APO(self, args):
+        if args:
+            s = next(s for s in settings_for(self.model) if s.key == "APO")
+            self.settings["APO"] = args[0] + s.tail_for(args[0])
+        return f"APO {self.settings['APO']}"
+
+    # TH (1750 Hz hold): the TH-D7A answers N; emulated as an A, not an E
+    def _cmd_TH(self, args):
+        return "N" if self.model == "TH-D7" else self._generic("TH", args)
+
     # ASC/BEL on a hidden band are refused, as on the radio
     def _cmd_ASC(self, args):
         return self._shown_band_only("ASC", args)
@@ -378,9 +389,10 @@ class Emulator:
 
 def _default_raw(s) -> str:
     if s.kind == "bool":
-        return "0" + s.tail
+        return "0" + s.tail_for("0")
     if s.kind in ("choice", "int"):
-        return (f"{s.minimum:0{s.digits}d}" if s.kind == "int" else "0" * s.digits) + s.tail
+        value = f"{s.minimum:0{s.digits}d}" if s.kind == "int" else "0" * s.digits
+        return value + s.tail_for(value)
     if s.kind == "map":
         return s.choices[0][1]
     if s.kind == "position":

@@ -518,7 +518,7 @@ class D7Radio:
             raw = raw.zfill(width)[-width:] if len(raw) <= width else raw
         if s.kind in ("bool", "choice", "int") and "," not in raw:
             # send back the trailing fields the radio gave, unchanged
-            raw += self._tails.get(s.key, s.tail)
+            raw += s.tail_for(raw, self._tails.get(s.key, ""))
         self.command(s.write_command(raw))
 
     def write_setting(self, s: Setting, value) -> None:
