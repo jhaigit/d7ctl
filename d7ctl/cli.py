@@ -455,6 +455,18 @@ def cmd_gui(radio, a):
 # parser
 # ---------------------------------------------------------------------------
 
+class _VersionAction(argparse.Action):
+    """--version, asking git only when it is used (argparse's own would ask on every run)."""
+
+    def __init__(self, option_strings, dest, **kw):
+        super().__init__(option_strings, dest, nargs=0, **kw)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from .version import version_string
+        print(f"d7ctl {version_string()}")
+        parser.exit()
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="d7ctl", description="Control a Kenwood TH-D7 / TH-D7G over its serial port.",
@@ -464,6 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("-b", "--baud", type=int, default=P.BAUDRATE, help="baud rate (the D7 uses 9600)")
     ap.add_argument("--timeout", type=float, default=1.0, help="reply timeout, s")
     ap.add_argument("-v", "--verbose", action="store_true", help="print serial traffic to stderr")
+    ap.add_argument("--version", action=_VersionAction, help="show version, git commit and date")
     sp = ap.add_subparsers(dest="cmd", metavar="COMMAND")
 
     def add(name, func, help_, **kw):

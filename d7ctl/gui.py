@@ -1417,6 +1417,7 @@ class MainWindow(QMainWindow):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
         view.addAction("Reset layout", self.default_layout)
+        self.menuBar().addMenu("&Help").addAction("&About d7ctl", self.about)
         self.setDockNestingEnabled(True)
         self.default_layout()
         self.set_connected(False)
@@ -1439,6 +1440,25 @@ class MainWindow(QMainWindow):
         if self.store is not None and self.store.value("window/geometry") is not None:
             self.restoreGeometry(self.store.value("window/geometry"))
             self.restoreState(self.store.value("window/state"))
+
+    def about_text(self) -> str:
+        import PySide6
+        import serial
+        from .version import build_info
+        i = build_info()
+        if i["commit"] is None:
+            commit = "not a git checkout"
+        else:
+            commit = i["commit"] + ("+ (uncommitted changes)" if i["dirty"] else "")
+        return (f"<h3>d7ctl {i['version']}</h3>"
+                "<p>Control for the Kenwood TH-D7 / TH-D7G over its serial port.</p>"
+                f"<table><tr><td>Git commit&nbsp;</td><td><tt>{commit}</tt></td></tr>"
+                f"<tr><td>Date</td><td>{i['date'] or '-'}</td></tr></table>"
+                f"<p><small>Python {sys.version.split()[0]}, PySide6 {PySide6.__version__}, "
+                f"pyserial {serial.__version__}</small></p>")
+
+    def about(self):
+        QMessageBox.about(self, "About d7ctl", self.about_text())
 
     CONSOLE_HEIGHT = 180          # px: about ten lines of traffic under the panels
 

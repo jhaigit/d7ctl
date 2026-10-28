@@ -118,3 +118,12 @@ def test_gui_band_scan_and_click_to_tune(app):
     assert win.radio.get_vfo(0).freq == 146_440_000
     win.close()
 
+
+def test_gui_about(app):
+    from d7ctl.version import build_info
+    win = MainWindow("emulator")
+    text = win.about_text()
+    i = build_info()
+    assert f"d7ctl {i['version']}" in text and i["commit"] in text and i["date"] in text
+    assert ("uncommitted changes" in text) is i["dirty"]
+    win.close()
