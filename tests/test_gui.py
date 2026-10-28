@@ -245,3 +245,30 @@ def test_gui_memory_dropdown_fits_a_full_name(app):
     full = c.fontMetrics().horizontalAdvance("000 WWWWWWWW")
     assert c.width() >= full and c.view().minimumWidth() >= full
     win.close()
+
+
+def test_gui_follows_a_name_entered_on_the_keys(app):
+    win = MainWindow("emulator")
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    mt = win.memories
+    mt.read(["001"])
+    assert pump(app, win, lambda: not win.worker.pending and "001" in mt.data)
+    win.radio.emulator.key_name("001", "BA2uA")         # [F], [9] on the radio
+    assert pump(app, win, lambda: mt.table.item(mt.row_of("001"), 1).text() == "BA2uA")
+    assert mt.data["001"].name == "BA2uA"
+    win.radio.emulator.key_name("002", "UNREAD")        # a memory the GUI has not read
+    assert pump(app, win, lambda: not win.worker.pending and mt.data.get("002") is not None
+                and mt.table.item(mt.row_of("002"), 1).text() == "UNREAD")
+    win.close()
+
+
+def test_console_counts_trailing_spaces(app):
+    win = MainWindow("emulator")
+    win.console.add("<", "MNA 0,199,AB  ")
+    win.console.add("<", "MNA 0,198,AB")
+    lines = win.console.log.toPlainText().splitlines()
+    assert lines[-2].endswith("MNA 0,199,AB     [2 trailing spaces]")
+    assert lines[-1].endswith("MNA 0,198,AB")
+    win.close()

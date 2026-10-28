@@ -77,6 +77,14 @@ class Emulator:
     def stop(self):
         self._stop.set()
 
+    def key_name(self, memid, name: str) -> None:
+        """A name entered on the keys ([F], [9]); with AI on the TH-D7A reports it
+        as "MNA 0,ccc,name" (2026-10-28)."""
+        with self.lock:
+            memid = P.normalise_memid(memid)
+            self.memories[memid].name = name
+            self._emit(f"MNA 0,{memid},{name}")
+
     # ------------------------------------------------------------------
     def _emit(self, line: str):
         if self.ai and self.async_sink:
@@ -333,7 +341,9 @@ class Emulator:
             old = self.memories.get(memid)
             ch.name = old.name if old else ""
             self.memories[memid] = ch
-        return "MW " + ",".join(args[:3])
+        # the TH-D7A answers a channel write with a bare "MW" (2026-10-28); assumed for
+        # the split side and erase too
+        return "MW"
 
     def _cmd_MNA(self, args):
         memid = P.normalise_memid(args[1])

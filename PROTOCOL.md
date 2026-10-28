@@ -96,8 +96,14 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
 - Every printable ASCII punctuation character is stored and has a glyph on
   the display, except the comma (the field separator), which the name
   editor refuses.
+- Trailing spaces are kept too (2026-10-28): `MNA 0,199,X   ` reads back
+  with its three spaces. A name entered on the keys had none (`BA2uA`).
+- A channel write `MW 0,0,ccc,<spec>` answers a bare `MW` (2026-10-28).
 - An empty name clears it: `MNA 0,050,` (as `write_memory` sends for a
   channel without a name).
+- A name entered on the radio's keys ([F], [9]) is reported with AI on as
+  `MNA 0,ccc,name` when the editor closes (2026-10-28: `MNA 0,199,BA2uA`).
+  The GUI updates that memory's row, its lists and the band display.
 - `MR 0,1,ccc` (the odd-split side) answers `N` for a memory with no split.
 - A command arriving on the PC port cancels the radio's menu mode, so
   polling (the GUI's Poll meters) makes the menus unusable.
@@ -128,13 +134,11 @@ match) and remove it here. Numbers are not stable; refer to the titles.
 - **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
   always 0 so far; meaning unknown. The driver writes the forms it reads;
   whether the radio also accepts `APO 1` alone is untested.
-- **Memory name characters**: trailing spaces (does `MNA 0,050,AB  ` read
-  back with them?) and bytes above 127, e.g. `Café` - stored, changed or
-  refused? ASCII punctuation is settled (see above).
-- **Name changes made on the radio's keys**: with AI on, does the radio
-  report them (the GUI would refresh), or are they seen only on the next read?
-- Replies to `MW`, `TX`, `UP`, `DW`: the driver accepts any reply starting
-  with the mnemonic; the exact forms are not recorded yet.
+- **Memory name characters above 127**, e.g. `Café` - stored, changed or
+  refused? ASCII punctuation and spaces are settled (see above).
+- Replies to `MW` for the split side (`MW 0,1,...`) and for an erase, and to
+  `TX`, `UP`, `DW`: the driver accepts any reply starting with the mnemonic;
+  the exact forms are not recorded yet.
 - `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
 
 **Other models**

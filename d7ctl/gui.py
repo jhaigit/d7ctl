@@ -11,6 +11,7 @@ blocks; auto-info reports from the radio arrive through Qt signals.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import sys
 import threading
@@ -1568,7 +1569,11 @@ class ConsoleTab(QWidget):
     def add(self, direction, line):
         if self.quiet.isChecked() and line.startswith(self.METER_TRAFFIC):
             return
-        self.log.appendPlainText(f"{time.strftime('%H:%M:%S')} {direction} {line}")
+        line = line.rstrip("\r\n")
+        spaces = len(line) - len(line.rstrip(" "))
+        # trailing spaces are data (memory names) but invisible in the log: count them
+        mark = f"   [{spaces} trailing space{'s' * (spaces > 1)}]" if spaces else ""
+        self.log.appendPlainText(f"{time.strftime('%H:%M:%S')} {direction} {line}{mark}")
 
     def note(self, text):
         self.log.appendPlainText(f"{time.strftime('%H:%M:%S')} # {text}")
@@ -1926,8 +1931,21 @@ class MainWindow(QMainWindow):
                 self.radio_tab.panels[int(args[0])].set_busy(args[1] == "1")
             elif mn in ("BC", "VMC", "MC", "DL"):
                 self.refresh_soon.start()     # coalesce a burst of reports
+            elif mn == "MNA" and len(args) >= 3:
+                # a name entered on the radio's keys ([F], [9]); the TH-D7A reports it (2026-10-28)
+                self.memory_renamed(P.normalise_memid(args[1]), ",".join(args[2:]))
         except (ValueError, IndexError, P.ProtocolError):
             pass
+
+    def memory_renamed(self, memid: str, name: str):
+        mt = self.memories
+        ch = mt.data.get(memid)
+        if ch is None:                         # not read yet (or thought empty): read it whole
+            self.run(lambda r: r.read_memory(memid), lambda c: mt.update_row(memid, c))
+        elif memid in mt.dirty:                # keep the user's unwritten edits in the row
+            ch.name = name
+        else:
+            mt.update_row(memid, dataclasses.replace(ch, name=name))
 
     # -- backup / restore ---------------------------------------------------------------
     def backup(self):
