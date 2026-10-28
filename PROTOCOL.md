@@ -80,6 +80,8 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   and `TH` (`N`: exists, refused in the state the radio was in), `BEPT` and
   `TEMP` (`?`: not on the TH-D7A, so now TH-D7G only).
 - `SV 5`, `TXI 4`: one digit each.
+- A command arriving on the PC port cancels the radio's menu mode, so
+  polling (the GUI's Poll meters) makes the menus unusable.
 - With the TNC in PACKET mode the TNC answers instead: `ID` gives `cmd:ID`
   (its prompt and an echo) then `?EH`. `D7Radio.open` reports this as
   `TncPacketMode` instead of a plain timeout.

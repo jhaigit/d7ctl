@@ -1108,7 +1108,9 @@ class MainWindow(QMainWindow):
         self.live.clicked.connect(self._live_changed)
         tb.addWidget(self.live)
         self.poll = QCheckBox("Poll meters")
-        self.poll.setToolTip("Read S-meter and busy for both bands every second")
+        self.poll.setToolTip("Read S-meter and busy for both bands every second.\n"
+                             "Untick it to use the radio's menus: a command from the PC "
+                             "cancels menu mode on the TH-D7A.")
         self.poll.setChecked(True)
         tb.addWidget(self.poll)
         tb.addSeparator()
