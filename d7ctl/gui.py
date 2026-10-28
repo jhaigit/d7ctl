@@ -16,14 +16,18 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QPainter, QPalette, QPen
+from PySide6.QtCore import (QObject, QRegularExpression, QRunnable, QSettings, Qt, QThreadPool,
+                            QTimer, Signal)
+from PySide6.QtGui import (QAction, QColor, QFont, QFontDatabase, QFontMetrics, QPainter,
+                           QPalette, QPen,
+                           QRegularExpressionValidator)
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
-    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
+    QDialogButtonBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
-    QSlider, QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
+    QSlider, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionComboBox,
+    QStyleOptionViewItem, QStylePainter, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -129,6 +133,113 @@ def mono_font(size: int, bold: bool = False) -> QFont:
     return f
 
 
+def limit_to_memory_name(edit: QLineEdit) -> QLineEdit:
+    """Stop typing at what MNA can store: NAME_LEN characters, no comma (the field separator)."""
+    edit.setMaxLength(P.NAME_LEN)
+    edit.setValidator(QRegularExpressionValidator(QRegularExpression(f"[^,]{{0,{P.NAME_LEN}}}"), edit))
+    edit.setPlaceholderText(f"up to {P.NAME_LEN} characters")
+    return edit
+
+
+MEMORY_LIST_ROWS = 12        # drop-down height of the memory lists
+MEMORY_LABEL_CHARS = 4 + P.NAME_LEN   # "000 " and a full name
+
+
+UNREAD_MARK = "?"             # after the id of a memory not read yet, drawn in UNREAD_COLOUR
+UNREAD_COLOUR = QColor("#d08000")
+UNREAD_ROLE = Qt.UserRole + 1 # item flag: memory not read yet (a name may itself end in "?")
+
+
+def memory_label(memid: str, data: dict) -> str:
+    """'000 W1AW RPT' (the name), '005 146.520' (no name: the frequency), '004'
+    (empty) or '030 ?' (not read yet). Short: the band panels are narrow."""
+    if memid not in data:
+        return f"{memid} {UNREAD_MARK}"
+    ch = data[memid]
+    if ch is None:
+        return memid
+    return f"{memid} {ch.name if ch.name.strip() else P.format_mhz(ch.freq, 3)}"
+
+
+def _draw_label_with_mark(painter, font, rect, text: str, colour: QColor) -> None:
+    """Draw 'id ?' at rect's left, vertically centred: the id in colour, the mark in UNREAD_COLOUR."""
+    before = text[:-len(UNREAD_MARK)]
+    fm = QFontMetrics(font)
+    painter.save()
+    painter.setFont(font)
+    painter.setPen(colour)
+    painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, before)
+    painter.setPen(UNREAD_COLOUR)
+    painter.drawText(rect.adjusted(fm.horizontalAdvance(before), 0, 0, 0),
+                     Qt.AlignLeft | Qt.AlignVCenter, UNREAD_MARK)
+    painter.restore()
+
+
+class MemoryItemDelegate(QStyledItemDelegate):
+    """Memory list rows: the '?' of an unread memory in colour."""
+
+    def paint(self, painter, option, index):
+        if not index.data(UNREAD_ROLE):
+            return super().paint(painter, option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""             # the style draws the row, we draw the text
+        widget = opt.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget)
+        # the inset QCommonStyle gives item text, so the row lines up with the others
+        rect.adjust(style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, widget) + 1, 0, 0, 0)
+        selected = opt.state & QStyle.State_Selected
+        colour = opt.palette.color(QPalette.HighlightedText if selected else QPalette.Text)
+        _draw_label_with_mark(painter, opt.font, rect, text, colour)
+
+
+class MemoryCombo(QComboBox):
+    """The closed box shows the '?' of an unread memory in colour too."""
+
+    def paintEvent(self, ev):
+        if not self.currentData(UNREAD_ROLE):
+            return super().paintEvent(ev)
+        p = QStylePainter(self)
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        text, opt.currentText = opt.currentText, ""
+        p.drawComplexControl(QStyle.CC_ComboBox, opt)
+        rect = self.style().subControlRect(QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, self)
+        rect.adjust(1, 0, -1, 0)                    # as QCommonStyle's CE_ComboBoxLabel
+        _draw_label_with_mark(p, self.font(), rect, text, self.palette().color(QPalette.ButtonText))
+
+
+def memory_combo() -> QComboBox:
+    """A memory list: item data = memory id; short and scrolling, in columns."""
+    c = MemoryCombo()
+    for memid in P.memory_ids():
+        if not P.is_call(memid):
+            c.addItem(memory_label(memid, {}), memid)
+            c.setItemData(c.count() - 1, True, UNREAD_ROLE)
+    c.setItemDelegate(MemoryItemDelegate(c))
+    c.setMaxVisibleItems(MEMORY_LIST_ROWS)
+    # some styles (Fusion, GTK) open a combo as a screen-high popup and ignore
+    # maxVisibleItems; this style property makes them use a short scrolling list
+    c.setStyleSheet("QComboBox { combobox-popup: 0; }")
+    c.setFont(mono_font(c.font().pointSize()))           # columns line up
+    # never narrower than a full label: 3-character id, a space, an 8-character name
+    c.setMinimumContentsLength(MEMORY_LABEL_CHARS)
+    c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    c.view().setMinimumWidth(c.fontMetrics().horizontalAdvance("W" * MEMORY_LABEL_CHARS)
+                             + c.style().pixelMetric(QStyle.PM_ScrollBarExtent) + 12)
+    return c
+
+
+def relabel_memory_combo(c: QComboBox, data: dict, only=None) -> None:
+    for i in range(c.count()):
+        memid = c.itemData(i)
+        if only is None or memid == only:
+            c.setItemText(i, memory_label(memid, data))
+            c.setItemData(i, memid not in data, UNREAD_ROLE)
+
+
 def tone_items():
     return [f"{t:.1f}" for t in P.valid_tones()]
 
@@ -201,8 +312,8 @@ class BandPanel(QGroupBox):
 
         mem = QHBoxLayout()
         mem.addWidget(QLabel("Memory"))
-        self.mem_combo = QComboBox()
-        self.mem_combo.addItems([m for m in P.memory_ids() if not P.is_call(m)])
+        self.mem_combo = memory_combo()
+        self.mem_combo.setToolTip("Names show once a memory has been read (Memories tab, or Store VFO)")
         mem.addWidget(self.mem_combo, 1)
         recall = QPushButton("Recall")
         recall.clicked.connect(self._recall)
@@ -325,20 +436,17 @@ class BandPanel(QGroupBox):
         self.main.run(lambda r: r.set_band_mode(b, m), lambda _: self.main.refresh_band(b))
 
     def _recall(self):
-        memid = self.mem_combo.currentText()
+        memid = self.mem_combo.currentData()
         b = self.band
         self.main.run(lambda r: r.recall_memory(b, memid), lambda _: self.main.refresh_band(b))
 
     def _store(self):
-        memid, ok = QInputDialog.getItem(self, "Store VFO", f"Store band {P.BANDS[self.band]} in memory:",
-                                         [m for m in P.memory_ids() if not P.is_call(m)], 0, False)
-        if not ok:
+        dlg = StoreDialog(self.main, self.band, self)
+        if not dlg.exec():
             return
-        name, ok = QInputDialog.getText(self, "Store VFO", f"Name for {memid} (up to {P.NAME_LEN}):")
-        if not ok:
-            return
+        memid, name = dlg.memid, dlg.name.text()
         b = self.band
-        self.main.run(lambda r: r.vfo_to_memory(b, memid, name[:P.NAME_LEN]),
+        self.main.run(lambda r: r.vfo_to_memory(b, memid, name),
                       lambda ch: self.main.memories.update_row(memid, ch))
 
     # -- display -----------------------------------------------------------
@@ -354,7 +462,7 @@ class BandPanel(QGroupBox):
         if b:
             b.setChecked(True)
         if st.get("memory"):
-            i = self.mem_combo.findText(st["memory"])
+            i = self.mem_combo.findData(st["memory"])
             if i >= 0:
                 self.mem_combo.setCurrentIndex(i)
         if st.get("power") is not None:
@@ -369,13 +477,16 @@ class BandPanel(QGroupBox):
             self.smeter.setValue(st["smeter"])
         if st.get("busy") is not None:
             self.set_busy(st["busy"])
+        self.mem_name = st.get("name", "")
         self.show_channel(st["vfo"], st.get("memory"))
 
     def show_channel(self, ch: P.Channel, memid=None):
         self.ch = ch
         self.display.setText(f"{ch.freq / 1e6:.5f}")
         mode = P.BAND_MODES.get(self.band_mode, "")
-        where = f"{mode} {self.mem_combo.currentText()}" if self.band_mode == 2 else mode
+        where = f"{mode} {self.mem_combo.currentData()}" if self.band_mode == 2 else mode
+        if self.band_mode == 2 and getattr(self, "mem_name", ""):
+            where += f" {self.mem_name}"
         extra = []
         if ch.shift:
             extra.append(f"{P.SHIFT_SYMBOLS[ch.shift]}{ch.offset / 1e6:.3f}")
@@ -406,6 +517,113 @@ class BandPanel(QGroupBox):
     def set_control(self, is_ctrl: bool):
         self.ctrl.setChecked(is_ctrl)
         self.ctrl.setStyleSheet("QPushButton:checked { background: #e0a020; font-weight: bold; }")
+
+
+class StoreDialog(QDialog):
+    """Pick the memory to store a band's VFO in, seeing which are in use.
+
+    What a memory holds comes from the Memories tab when it has been read;
+    otherwise the dialog reads just that memory (one MR) when it is picked.
+    """
+
+    def __init__(self, main: "MainWindow", band: int, parent=None):
+        super().__init__(parent)
+        self.main, self.band = main, band
+        self.ids = [m for m in P.memory_ids() if not P.is_call(m)]
+        self.searching = False
+        self.setWindowTitle(f"Store band {P.BANDS[band]} in a memory")
+        form = QFormLayout(self)
+        row = QHBoxLayout()
+        self.combo = memory_combo()
+        relabel_memory_combo(self.combo, self.main.memories.data)
+        self.combo.currentIndexChanged.connect(self._picked)
+        row.addWidget(self.combo, 1)
+        self.next_btn = QPushButton("Next empty")
+        self.next_btn.setToolTip("Find the next empty memory after this one (reads the radio as needed)")
+        self.next_btn.clicked.connect(self.next_empty)
+        row.addWidget(self.next_btn)
+        form.addRow("Memory", row)
+        self.state = QLabel()
+        form.addRow("", self.state)
+        self.name = limit_to_memory_name(QLineEdit())
+        form.addRow("Name", self.name)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        form.addRow(self.buttons)
+        known_empty = [i for i, m in enumerate(self.ids) if self._known(m) and self._held(m) is None]
+        self.combo.setCurrentIndex(known_empty[0] if known_empty else 0)
+        self._picked(self.combo.currentIndex())
+
+    @property
+    def memid(self) -> str:
+        return self.ids[self.combo.currentIndex()]
+
+    def _known(self, memid) -> bool:
+        return memid in self.main.memories.data
+
+    def _held(self, memid):
+        return self.main.memories.data.get(memid)
+
+    def _show_state(self):
+        memid = self.memid
+        ok = self.buttons.button(QDialogButtonBox.Ok)
+        if not self._known(memid):
+            self.state.setText("checking…")
+            ok.setEnabled(False)
+            return
+        ok.setEnabled(not self.searching)
+        ch = self._held(memid)
+        if ch is None:
+            self.state.setText("empty")
+            self.state.setStyleSheet("")
+            ok.setText("Store")
+        else:
+            self.state.setText(f"in use: {ch.name or '(no name)'}  {ch.summary()} - storing replaces it")
+            self.state.setStyleSheet("color: #c06000")
+            ok.setText("Overwrite")
+
+    def _picked(self, i):
+        memid = self.ids[i]
+        self._show_state()
+        if not self._known(memid):
+            self._read(memid, lambda: None)
+
+    def _read(self, memid, then):
+        def done(ch):
+            self.main.memories.update_row(memid, ch)        # the Memories tab learns it too
+            relabel_memory_combo(self.combo, self.main.memories.data, memid)
+            if memid == self.memid:
+                self._show_state()
+            then()
+
+        def failed(exc):
+            self._stop_search(f"could not read {memid}: {exc}")
+        self.main.run(lambda r: r.read_memory(memid), done, failed)
+
+    def next_empty(self):
+        self.searching = True
+        self.next_btn.setEnabled(False)
+        self._search(self.combo.currentIndex() + 1)
+
+    def _search(self, i):
+        while i < len(self.ids) and self._known(self.ids[i]) and self._held(self.ids[i]) is not None:
+            i += 1
+        if i >= len(self.ids):
+            self._stop_search("no empty memory after this one")
+        elif self._known(self.ids[i]):
+            self._stop_search()
+            self.combo.setCurrentIndex(i)
+        else:
+            self.state.setText(f"checking {self.ids[i]}…")
+            self._read(self.ids[i], lambda: self._search(i))
+
+    def _stop_search(self, message=None):
+        self.searching = False
+        self.next_btn.setEnabled(True)
+        self._show_state()
+        if message:
+            self.state.setText(message)
 
 
 class RadioTab(QWidget):
@@ -748,7 +966,7 @@ class ScanTab(QWidget):
 
 MEM_COLUMNS = [  # (header, CHIRP field or special, choices for a combo or None)
     ("Ch", "Location", None),
-    ("Name", "Name", None),
+    ("Name", "Name", None),         # MEM_NAME_COLUMN
     ("Freq MHz", "Frequency", None),
     ("Duplex", "Duplex", ["", "+", "-", "split"]),
     ("Offset / TX MHz", "Offset", None),
@@ -760,6 +978,9 @@ MEM_COLUMNS = [  # (header, CHIRP field or special, choices for a combo or None)
     ("Rev", "Rev", ["", "R"]),
     ("Skip", "Skip", ["", "S"]),
 ]
+
+
+MEM_NAME_COLUMN = 1
 
 
 class ComboDelegate(QStyledItemDelegate):
@@ -778,6 +999,13 @@ class ComboDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index):
         model.setData(index, editor.currentText())
+
+
+class NameDelegate(QStyledItemDelegate):
+    """Memory name cells: the editor stops at what the radio can store."""
+
+    def createEditor(self, parent, option, index):
+        return limit_to_memory_name(QLineEdit(parent))
 
 
 class MemoriesTab(QWidget):
@@ -839,11 +1067,12 @@ class MemoriesTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
                                    | QAbstractItemView.AnyKeyPressed)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(MEM_NAME_COLUMN, QHeaderView.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(self.fontMetrics().height() + 8)
         for col, (_h, _f, choices) in enumerate(MEM_COLUMNS):
             if choices:
                 self.table.setItemDelegateForColumn(col, ComboDelegate(choices, self.table))
+        self.table.setItemDelegateForColumn(MEM_NAME_COLUMN, NameDelegate(self.table))
         self._filling = True
         for row, memid in enumerate(self.ids):
             label = P.CALL_LABELS.get(memid, memid)
@@ -873,6 +1102,10 @@ class MemoriesTab(QWidget):
         if clean:
             self.data[memid] = ch
             self.dirty.discard(memid)
+            for panel in self.main.radio_tab.panels:     # their memory lists show names
+                relabel_memory_combo(panel.mem_combo, self.data, memid)
+                if panel.band_mode == 2 and panel.mem_combo.currentData() == memid:
+                    self.main.refresh_band(panel.band)   # its display line shows this memory
         row = self.row_of(memid)
         self._filling = True
         try:
@@ -904,6 +1137,7 @@ class MemoriesTab(QWidget):
     def channel_from_row(self, memid):
         row = self.row_of(memid)
         d = {f: self.table.item(row, c).text().strip() for c, (_h, f, _ch) in enumerate(MEM_COLUMNS)}
+        d["Name"] = self.table.item(row, MEM_NAME_COLUMN).text()   # the radio keeps spaces in names
         d["Location"] = memid
         if not d["Frequency"]:
             return None
@@ -1340,11 +1574,12 @@ class ConsoleTab(QWidget):
         self.log.appendPlainText(f"{time.strftime('%H:%M:%S')} # {text}")
 
     def send(self):
-        line = self.entry.text().strip()
-        if not line:
+        line = self.entry.text().lstrip()     # trailing spaces are data (memory names)
+        if not line.strip():
             return
         self.entry.clear()
-        self.main.run(lambda r: r.command(line, check=False))
+        # a raw command can change anything: refresh the band displays afterwards
+        self.main.run(lambda r: r.command(line, check=False), lambda _: self.main.refresh_soon.start())
 
 
 # ---------------------------------------------------------------------------

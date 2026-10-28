@@ -45,11 +45,11 @@ def test_gui_connect_edit_and_memories(app):
     assert pump(app, win, lambda: not win.worker.pending and mt.data.get("000") is not None, 15)
     row = mt.row_of("040")
     mt.table.item(row, 2).setText("146.52")
-    mt.table.item(row, 1).setText("SIMPLEX")
+    mt.table.item(row, 1).setText("  SIMPLX")         # leading spaces are kept
     assert "040" in mt.dirty
     mt.write_changes()
     assert pump(app, win, lambda: not win.worker.pending and "040" not in mt.dirty)
-    assert win.radio.read_memory("040").name == "SIMPLEX"
+    assert win.radio.read_memory("040").name == "  SIMPLX"
     # settings were read at connect
     assert pump(app, win, lambda: win.settings_tab.rows["MYC"].widget.text() == "NOCALL")
     st = win.settings_tab
@@ -137,3 +137,111 @@ def test_gui_1750_button_follows_the_radio(app):
         assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
         assert win.radio_tab.t1750.isEnabled() is enabled
         win.close()
+
+
+def test_gui_memory_name_editor_stops_at_eight(app):
+    from d7ctl import protocol as P
+    from d7ctl.gui import MEM_NAME_COLUMN, limit_to_memory_name
+    QtTest = pytest.importorskip("PySide6.QtTest")
+    editor = limit_to_memory_name(QtWidgets.QLineEdit())
+    editor.show()
+    QtTest.QTest.keyClicks(editor, "REPEATER1,2")
+    assert editor.text() == "REPEATER" and len(editor.text()) == P.NAME_LEN
+    editor.clear()
+    QtTest.QTest.keyClicks(editor, "A,B")
+    assert editor.text() == "AB"                     # no commas
+    # the Memories table's Name column edits with such an editor
+    win = MainWindow("emulator")
+    t = win.memories.table
+    e = t.itemDelegateForColumn(MEM_NAME_COLUMN).createEditor(
+        t.viewport(), None, t.model().index(0, MEM_NAME_COLUMN))
+    assert e.maxLength() == P.NAME_LEN
+    win.close()
+
+
+def test_gui_store_dialog_shows_used_memories(app):
+    from d7ctl.gui import MEMORY_LIST_ROWS, StoreDialog
+    win = MainWindow("emulator")
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    dlg = StoreDialog(win, 0)
+    ok = dlg.buttons.button(QtWidgets.QDialogButtonBox.Ok)
+    # nothing read yet: 000 is read on its own when picked, and is in use
+    assert dlg.memid == "000"
+    assert pump(app, win, lambda: "in use" in dlg.state.text())
+    assert "W1AW RPT" in dlg.combo.itemText(0) and ok.text() == "Overwrite"
+    assert "000" in win.memories.data                 # the Memories tab learnt it too
+    # Next empty skips the used 001 and lands on the first empty one
+    dlg.next_empty()
+    assert pump(app, win, lambda: not dlg.searching and not win.worker.pending)
+    assert dlg.memid not in ("000", "001") and win.radio.read_memory(dlg.memid) is None
+    assert dlg.state.text() == "empty" and ok.text() == "Store" and ok.isEnabled()
+    assert dlg.combo.maxVisibleItems() == MEMORY_LIST_ROWS
+    dlg.close()
+    win.close()
+
+
+def test_gui_band_memory_list_and_display_show_names(app):
+    win = MainWindow("emulator")
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    a = win.radio_tab.panels[0]
+    assert a.mem_combo.itemText(0) == "000 ?"          # not read yet
+    win.memories.read(["000", "001"])
+    assert pump(app, win, lambda: not win.worker.pending and "W1AW RPT" in a.mem_combo.itemText(0))
+    from d7ctl.gui import UNREAD_ROLE
+    assert a.mem_combo.itemData(0, UNREAD_ROLE) is False and a.mem_combo.itemData(5, UNREAD_ROLE) is True
+    assert "2M CALL" in win.radio_tab.panels[1].mem_combo.itemText(1)
+    # recall from the list: the display line names the memory (read from the radio)
+    a.mem_combo.setCurrentIndex(a.mem_combo.findData("001"))
+    a._recall()
+    assert pump(app, win, lambda: not win.worker.pending and "MR 001 2M CALL" in a.subline.text())
+    win.close()
+
+
+def test_gui_renaming_the_shown_memory_updates_the_display(app):
+    win = MainWindow("emulator")
+    win.show()
+    win.toggle_connection()
+    assert pump(app, win, lambda: win.radio is not None and not win.worker.pending)
+    a = win.radio_tab.panels[0]
+    a.mem_combo.setCurrentIndex(a.mem_combo.findData("001"))
+    a._recall()
+    assert pump(app, win, lambda: not win.worker.pending and "MR 001 2M CALL" in a.subline.text())
+    # rename it in the Memories table and write
+    mt = win.memories
+    mt.read(["001"])
+    assert pump(app, win, lambda: not win.worker.pending and "001" in mt.data)
+    mt.table.item(mt.row_of("001"), 1).setText("SIMPLEX")
+    mt.write_changes()
+    assert pump(app, win, lambda: not win.worker.pending and "MR 001 SIMPLEX" in a.subline.text())
+    # rename it from the Console, trailing spaces and all
+    win.console.entry.setText("MNA 0,001,CALL  ")
+    win.console.send()
+    assert pump(app, win, lambda: not win.worker.pending and "MR 001 CALL" in a.subline.text(), 3)
+    assert win.radio.read_memory_name("001") == "CALL  "
+    win.close()
+
+
+def test_memory_label_is_name_or_frequency():
+    from d7ctl import protocol as P
+    from d7ctl.gui import memory_label
+    data = {"000": P.Channel(freq=146_940_000, step=3, name="W1AW RPT"),
+            "005": P.Channel(freq=146_520_000, step=3), "004": None}
+    assert memory_label("000", data) == "000 W1AW RPT"
+    assert memory_label("005", data) == "005 146.520"
+    assert memory_label("004", data) == "004"
+    assert memory_label("030", data) == "030 ?"
+
+
+def test_gui_memory_dropdown_fits_a_full_name(app):
+    win = MainWindow("emulator")
+    win.resize(700, 600)                               # a narrow window squeezes the panels
+    win.show()
+    app.processEvents()
+    c = win.radio_tab.panels[0].mem_combo
+    full = c.fontMetrics().horizontalAdvance("000 WWWWWWWW")
+    assert c.width() >= full and c.view().minimumWidth() >= full
+    win.close()

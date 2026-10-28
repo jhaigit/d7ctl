@@ -227,3 +227,18 @@ def test_sweep(radio):
 def test_sweep_frequencies():
     assert P.sweep_frequencies(146_401_000, 146_460_000, 20) == [146_420_000, 146_440_000, 146_460_000]
     assert P.sweep_frequencies(145_000_000, 145_012_500, 6.25)[-1] == 145_012_500
+
+
+def test_memory_names_keep_spaces_and_symbols(radio):
+    # the TH-D7A stores and returns "  Testx" and "Test;x" unchanged (2026-10-28)
+    for name in ("  Testx", "Test;x", "AB  ", " A B C "):
+        radio.write_memory(199, P.Channel(freq=146_520_000, step=3, name=name))
+        assert radio.read_memory(199).name == name
+
+
+def test_band_status_names_the_memory(radio):
+    radio.recall_memory(0, "000")
+    st = radio.band_status(0)
+    assert st["memory"] == "000" and st["name"] == "W1AW RPT"
+    radio.set_band_mode(0, "VFO")
+    assert radio.band_status(0)["name"] == ""

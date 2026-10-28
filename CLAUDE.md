@@ -19,6 +19,10 @@ CAD builds). Git repository since 2026-10-24 (branch `main`, no remote).
   System Python has no tkinter, so the GUI is Qt.
 - `.venv/bin/python -m pytest -q` must pass after every change; GUI tests run offscreen.
 - Any protocol fact learned from the real radio: fix the code, the emulator
-  (it must keep matching the radio), and PROTOCOL.md's Unverified list together.
+  (it must keep matching the radio), and PROTOCOL.md together: the answer under
+  "Seen on hardware", the question removed from the Unverified list.
+- PROTOCOL.md's **Unverified - open questions** list is where every open
+  question about the radio lives: add one as soon as it comes up, so nothing
+  is left only in a conversation.
 - TX is outward-facing: the CLI only keys with an explicit `--seconds` (max 300)
   and always sends RX in `finally`; the GUI PTT is hold-to-talk with a 3-min guard.

@@ -48,6 +48,8 @@ def fmt_band(st: dict, control: int) -> str:
     star = "*" if P.band_index(st["band"]) == control else " "
     mode = P.BAND_MODES.get(st["mode"], "?")
     where = f"{mode} {st['memory']}" if st["memory"] else mode
+    if st.get("name"):
+        where += f" '{st['name']}'"
     parts = [f"Band {st['band']}{star} [{where:7}] {ch.summary()}"]
     extras = []
     if st.get("power") is not None:

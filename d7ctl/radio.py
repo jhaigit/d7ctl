@@ -190,7 +190,8 @@ class D7Radio:
             buf += chunk
             while P.EOL in buf:
                 raw, buf = buf.split(P.EOL, 1)
-                line = raw.decode(P.ENCODING).strip("\n\r ")
+                # only line ends: spaces belong to the reply (names keep them)
+                line = raw.decode(P.ENCODING).strip("\r\n")
                 if line:
                     self._dispatch(line)
 
@@ -404,6 +405,7 @@ class D7Radio:
         b = P.band_index(band)
         st = {"band": P.BANDS[b], "vfo": self.get_vfo(b), "mode": self.get_band_mode(b)}
         st["memory"] = self.get_memory_channel(b) if st["mode"] == 2 else None
+        st["name"] = self.read_memory_name(st["memory"]) if st["memory"] else ""
         for key, fn in (("squelch", self.get_squelch), ("power", self.get_power),
                         ("smeter", self.get_smeter), ("busy", self.get_busy)):
             try:
@@ -470,15 +472,21 @@ class D7Radio:
             if exc.reply == "N":
                 return None
             raise
-        with contextlib.suppress(CommandRejected):
-            reply = self.command("MNA", 0, memid)
-            ch.name = reply.split(",", 2)[2] if reply.count(",") >= 2 else ""
+        ch.name = self.read_memory_name(memid)
         if ch.shift == 0:
             with contextlib.suppress(CommandRejected, P.ProtocolError):
                 tx = P.parse_mr(self.command("MR", 0, 1, memid))[2]
                 if tx.freq and tx.freq != ch.freq:
                     ch.tx_freq = tx.freq
         return ch
+
+    def read_memory_name(self, memid) -> str:
+        """The memory's name ('' when it has none or the radio refuses)."""
+        try:
+            reply = self.command("MNA", 0, P.normalise_memid(memid))
+        except CommandRejected:
+            return ""
+        return reply.split(",", 2)[2] if reply.count(",") >= 2 else ""
 
     def write_memory(self, memid, ch: Channel) -> None:
         memid = P.normalise_memid(memid)

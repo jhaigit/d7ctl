@@ -322,8 +322,10 @@ class Channel:
 # ---------------------------------------------------------------------------
 
 def split_reply(line: str):
-    """'SQ 0,03' -> ('SQ', ['0', '03']); 'LK' -> ('LK', [])."""
-    mnemonic, _, rest = line.strip().partition(" ")
+    """'SQ 0,03' -> ('SQ', ['0', '03']); 'LK' -> ('LK', []).
+
+    Spaces at the end are data: a memory name keeps them ("MNA 0,199,AB  ")."""
+    mnemonic, _, rest = line.lstrip().rstrip("\r\n").partition(" ")
     return mnemonic, (rest.split(",") if rest else [])
 
 

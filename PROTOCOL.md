@@ -89,6 +89,16 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   menu item, and answers `N` to `TH` and to `TT` (no tone is sent). The GUI
   greys out its 1750 Hz button when `TH` is refused.
 - `RX` answers a bare `RX` (no argument).
+- Memory names (2026-10-28): lower case and most punctuation are stored as
+  sent, `;` included (`MNA 0,199,Test;x`), and leading spaces are kept
+  (`MNA 0,199,  Testx` reads back the same). d7ctl therefore never trims
+  names: the reader removes only CR/LF from a line, never spaces.
+- Every printable ASCII punctuation character is stored and has a glyph on
+  the display, except the comma (the field separator), which the name
+  editor refuses.
+- An empty name clears it: `MNA 0,050,` (as `write_memory` sends for a
+  channel without a name).
+- `MR 0,1,ccc` (the odd-split side) answers `N` for a memory with no split.
 - A command arriving on the PC port cancels the radio's menu mode, so
   polling (the GUI's Poll meters) makes the menus unusable.
 - With the TNC in PACKET mode the TNC answers instead: `ID` gives `cmd:ID`
@@ -98,23 +108,35 @@ with value tables is `d7ctl/settings.py` (`d7ctl setting describe`).
   coded): the radio answered `PC 0,2` with L on its display.
   Code 1 is refused: `PC 0,1` -> `N`; `PC 0,2` -> `PC 0,2`.
 
-## Unverified - check on a real radio
-1. (Resolved 2026-10-27: BUF write works - see above. The FQ/SFT/... fallback
-   in `D7Radio.set_vfo` stays for radios that answer `?`, but has not run on one.)
-2. (Resolved 2026-10-27: `PC b,1` is refused - see above.)
-3. (Resolved 2026-10-27: `SV` is one digit, 0 Off, 1 0.2 s ... 9 5 s.)
-4. (Resolved 2026-10-27: `DL` 0 single band, 1 dual.)
-5. (Resolved 2026-10-27: `TXI` 0-7 = 0.5, 1, 2, 3, 5, 10, 20, 30 min.)
-6. Replies to `MW`, `TX`, `UP`, `DW` - the driver accepts any reply starting
-   with the mnemonic. (`RX` answers `RX`; `TT` on the TH-D7A answers `N`.)
-7. `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
-8. **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
-   always 0 so far; meaning unknown. The driver writes the same forms it
-   reads (`APO 0`, `APO 1,0`); whether the radio also accepts `APO 1`
-   without it is untested.
-   `TH` (1750 Hz hold) is untested on a TH-D7E.
-9. **`TC 1`** (from the Kenwood command lists) should hand the port from the
-   TNC back to the radio; the emulator assumes it does and answers `TC 1`.
-10. **Band sweep timing** (GUI Scan): how long after a BUF write the S-meter
-    reading is valid (default dwell 100 ms, a guess), and whether `SM` reads
-    a signal that is below the squelch setting or reports 0 until it opens.
+## Unverified - open questions
+Questions still to answer on a real radio. When one is answered, record the
+answer under **Seen on hardware** (fixing the code and the emulator to
+match) and remove it here. Numbers are not stable; refer to the titles.
+
+**Not yet tried on the radio**
+- **Transmit**: `d7ctl tx --seconds N` and the GUI PTT (TX, then RX in all
+  cases). The reply to `TX` is unknown; `RX` answers `RX`. Use a dummy load.
+- **Band sweep** (GUI Scan): how long after a BUF write the S-meter reading
+  is valid (default dwell 100 ms, a guess), and whether `SM` reads a signal
+  below the squelch setting or reports 0 until the squelch opens.
+- **`TC 1`** (from the Kenwood command lists) should hand the port from the
+  TNC in PACKET mode back to the radio; the emulator assumes it does.
+- **BUF-write fallback**: `D7Radio.set_vfo` falls back to FQ/SFT/OS/... if BUF
+  write answers `?`. The TH-D7A accepts BUF write, so the fallback has never run.
+
+**Partly answered**
+- **APO second field**: present only when APO is on (`APO 0`, `APO 1,0`),
+  always 0 so far; meaning unknown. The driver writes the forms it reads;
+  whether the radio also accepts `APO 1` alone is untested.
+- **Memory name characters**: trailing spaces (does `MNA 0,050,AB  ` read
+  back with them?) and bytes above 127, e.g. `Café` - stored, changed or
+  refused? ASCII punctuation is settled (see above).
+- **Name changes made on the radio's keys**: with AI on, does the radio
+  report them (the GUI would refresh), or are they seen only on the next read?
+- Replies to `MW`, `TX`, `UP`, `DW`: the driver accepts any reply starting
+  with the mnemonic; the exact forms are not recorded yet.
+- `SC`, `MON`, `NSFT` exist per the command list / Hamlib; behaviour unconfirmed.
+
+**Other models**
+- **TH-D7E / TH-D7(G)**: `TH` (1750 Hz hold) and `TT` on a radio that has the
+  tone; all D7G-only settings (none tested: the radio at hand is a TH-D7A).

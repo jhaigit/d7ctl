@@ -105,7 +105,7 @@ class Emulator:
         """One command line in, one reply line out."""
         with self.lock:
             try:
-                return self._handle(line.strip())
+                return self._handle(line.strip("\r\n"))     # spaces are data
             except (ValueError, IndexError, KeyError, P.ProtocolError):
                 return "?"
 
@@ -472,7 +472,7 @@ def serve_pty(emulator: Emulator) -> None:
             buf += data
             while P.EOL in buf:
                 raw, buf = buf.split(P.EOL, 1)
-                line = raw.decode(P.ENCODING).strip("\n ")
+                line = raw.decode(P.ENCODING).strip("\n")
                 if line or raw == b"":
                     sink(emulator.handle(line))
     except KeyboardInterrupt:
