@@ -6,6 +6,13 @@ No Redmine project and no `new-project.sh` skeleton (that skeleton is for
 CAD builds). Git repository since 2026-10-24 (branch `main`); public on GitHub
 since 2026-10-28 as https://github.com/jhaigit/d7ctl (remote `origin`), MIT licence.
 
+## Releases
+- `v0.1.0` (2026-10-29, commit `b299942`): first release, a GitHub Release with
+  notes on what works on the TH-D7A and what has only run on the emulator.
+- To release: raise the version in `pyproject.toml` and `d7ctl/__init__.py`
+  together, commit, then make an annotated tag `vX.Y.Z` on that commit, push the
+  tag, and run `gh release create vX.Y.Z` with notes in the same form.
+
 ## Layout
 - `d7ctl/protocol.py` — tables, `Channel`, wire spec encode/decode (pure)
 - `d7ctl/settings.py` — registry of every menu setting (key, kind, values, model variant)
